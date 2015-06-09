@@ -1,12 +1,34 @@
 #include "snake.h"
 #include <linux/errno.h>
 #include <linux/module.h>
-#include <asm/semaphore.h>
+#include <asm-i386/semaphore.h>
 #include <linux/fs.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <time.h>
+#include <linux/slab.h>		// For kmalloc() and kfree()
+#include <linux/random.h>	// For get_random_bytes()
+//#include <stdio.h>
 MODULE_LICENSE("GPL");
+
+/*******************************************************************************************
+ ===========================================================================================
+ ===========================================================================================
+                                   DEBUG FUNCTIONS
+ ===========================================================================================
+ ===========================================================================================
+ ******************************************************************************************/
+// Set this to 1 for debug mode, or 0 for production
+#define HW4_DEBUG 1
+
+// Conditional debug printing.
+// Important note: don't do PRINT("%d",++i) if you want i to be incremented in the production
+// version! If HW4_DEBUG is 0 then the command won't exist and i won't be incremented.
+#if HW4_DEBUG
+	#define PRINT(...)			printk(__VA_ARGS__);
+	#define PRINT_IF(cond,...)	if(cond) PRINT(__VA_ARGS__);
+#else
+	#define PRINT(...)
+	#define PRINT_IF(...)
+#endif
+
 
 /*******************************************************************************************
  ===========================================================================================
@@ -95,7 +117,7 @@ int old_main() {
 
 	if (!Init(&matrix))
 	{
-		printf("Illegal M, N parameters.");
+		//printf("Illegal M, N parameters.");
 		return -1;
 	}
 	while (Update(&matrix, player))
@@ -117,10 +139,10 @@ bool Init(Matrix *matrix) {
 		(*matrix)[N - 1][i] = BLACK * (i + 1);
 	}
 	/* initialize the food location */
-	srand(time(0));
+	PRINT("OLD CODE: srand(time(0))\n");
 	if (RandFoodLocation(matrix) != ERR_OK)
 		return FALSE;
-	printf("instructions: white player is represented by positive numbers, \nblack player is represented by negative numbers\n");
+	//printf("instructions: white player is represented by positive numbers, \nblack player is represented by negative numbers\n");
 	Print(matrix);
 
 	return TRUE;
@@ -132,24 +154,24 @@ bool Update(Matrix *matrix, Player player) {
 
 	if (!CheckTarget(matrix, player, p))
 	{
-		printf("% d lost.", player);
+		//printf("% d lost.", player);
 		return FALSE;
 	}
 	e = CheckFoodAndMove(matrix, player, p);
 	if (e == ERR_BOARD_FULL)
 	{
-		printf("the board is full, tie");
+		//printf("the board is full, tie");
 		return FALSE;
 	}
 	if (e == ERR_SNAKE_IS_TOO_HUNGRY)
 	{
-		printf("% d lost. the snake is too hungry", player);
+		//printf("% d lost. the snake is too hungry", player);
 		return FALSE;
 	}
 	// only option is that e == ERR_OK
 	if (IsMatrixFull(matrix))
 	{
-		printf("the board is full, tie");
+		//printf("the board is full, tie");
 		return FALSE;
 	}
 
@@ -160,17 +182,21 @@ Point GetInputLoc(Matrix *matrix, Player player) {
 	Direction dir;
 	Point p;
 
-	printf("% d, please enter your move(DOWN2, LEFT4, RIGHT6, UP8):\n", player);
+	//printf("% d, please enter your move(DOWN2, LEFT4, RIGHT6, UP8):\n", player);
 	do
 	{
+		/** NEW CODE START */
+		dir = UP;
+		/** NEW CODE END */
+		/** OLD CODE:
 		if (scanf("%d", &dir) < 0)
 		{
 			printf("an error occurred, the program will now exit.\n");
 			exit(1);
-		}
+		}*/
 		if (dir != UP   && dir != DOWN && dir != LEFT && dir != RIGHT)
 		{
-			printf("invalid input, please try again\n");
+			//printf("invalid input, please try again\n");
 		}
 		else
 		{
@@ -297,8 +323,12 @@ ErrorCode RandFoodLocation(Matrix *matrix) {
 	Point p;
 	do
 	{
-		p.x = rand() % N;
-		p.y = rand() % N;
+		get_random_bytes(&p.x,sizeof(int));
+		get_random_bytes(&p.y,sizeof(int));
+		p.x %= N;
+		p.y %= N;
+		PRINT("OLD CODE: p.x = rand() %% N;\n");
+		PRINT("OLD CODE: p.y = rand() %% N;\n");
 	} while (!IsAvailable(matrix, p) || IsMatrixFull(matrix));
 
 	if (IsMatrixFull(matrix))
@@ -325,41 +355,84 @@ void Print(Matrix *matrix) {
 	int i;
 	Point p;
 	for (i = 0; i < N + 1; ++i)
-		printf("---");
-	printf("\n");
+		;//printf("---");
+	//printf("\n");
 	for (p.y = 0; p.y < N; ++p.y)
 	{
-		printf("|");
+		//printf("|");
 		for (p.x = 0; p.x < N; ++p.x)
 		{
 			switch ((*matrix)[p.y][p.x])
 			{
-			case FOOD:  printf("  *"); break;
-			case EMPTY: printf("  ."); break;
-			default:    printf("% 3d", (*matrix)[p.y][p.x]);
+			case FOOD:  //printf("  *");
+				break;
+			case EMPTY: //printf("  .");
+				break;
+			default:    //printf("% 3d", (*matrix)[p.y][p.x]);
+				break;
 			}
 		}
-		printf(" |\n");
+		//printf(" |\n");
 	}
 	for (i = 0; i < N + 1; ++i)
-		printf("---");
-	printf("\n");
+		;//printf("---");
+	//printf("\n");
 }
 
 
 /*******************************************************************************************
  ===========================================================================================
  ===========================================================================================
-                                   FOPS FUNCTIONS
+                                   MODULE FUNCTIONS
  ===========================================================================================
  ===========================================================================================
  ******************************************************************************************/
 /* *************
  GLOBALS
  **************/
+// Module name
 #define MODULE_NAME "snake"
-static int major = -1;
- 
+
+// Simple typedef, for comfort
+typedef struct semaphore Semaphore;
+
+// Major number, and total number of games allowed (given as input)
+int major = -1;
+int total_games = 0;
+MODULE_PARM(total_games,"i");
+
+// Global lock, to protect the private file data during open().
+// Uses files_initialized[total_games] to keep track of which Game structures
+// have already been initialized, after which the per-game semaphores may be
+// used
+Semaphore file_lock;
+int* files_initialized = NULL;
+
+// Game states, to be stored as private data per game
+typedef enum {
+	PRE_START,		// Game hasn't started yet (no player has joined)
+	WAIT_FOR_B,		// Player 1 has joined, waiting for player 2
+	IN_PROGRESS,	// Game is being played
+	RAGE_QUIT,		// Game stopped: one of the players quit (called release(), for example)
+	W_WIN,			// Game over, white player won
+	B_WIN,			// Game over, black player won
+} GameState;
+
+// All game-related data should be stored here.
+// This includes synchronization tools.
+typedef struct game_t {
+	Matrix matrix;				// Main game grid
+	Semaphore white_move;		// White player must lock this to move (signalled by black player)
+	Semaphore black_move;		// Black player must lock this to move (signalled by white player)
+	Semaphore w_player_join;	// Player must lock this successfully to join as the white player
+	Semaphore b_player_join;	// Player must lock this successfully to join as the black player
+} Game;
+
+/* *************
+ FOPS FUNCTIONS
+ **************/
+/*
+
 int our_open(struct inode* i, struct file* filp) {
 	1. Get minor. Say minor == N
 	2. Setup the file object with the minor, semaphores, game state, locks, etc. (DYNAMIC ALLOC)
@@ -402,8 +475,8 @@ int our_ioctl(struct inode *i, struct file *filp, unsigned int cmd, unsigned lon
 	case SNAKE_GET_COLOR:
 		
 		break;
-	default: ??
-		return -ENOSYS;
+	default:
+		return -ENOTTY;
 	}
 }
 
@@ -411,30 +484,59 @@ loff_t our_llseek(struct file *filp, loff_t x, int n) {
 	return -ENOSYS;
 }
 
+*/
+
 struct file_operations fops = {
-	.open=		our_open,
+/*	.open=		our_open,
 	.release=	our_release,
 	.read=		our_read,
 	.write=		our_write,
 	.llseek=	our_llseek,
-	.ioctl=		our_ioctl,
+	.ioctl=		our_ioctl, */
 };
+
 
 int init_module(void) {
 	
-	// Basic setup
-	major = register_chrdev(0, MODULE_NAME, &fops);
-	error check major
-	SET_MODULE_OWNER(&fops);
+	PRINT("IN INIT_MODULE\n");
 	
-	// Setup variables
-	semaphores, game variables, etc.
+	// Setup variables: files_initialized[] array and the file_lock semaphore
+	files_initialized = (int*)kmalloc(sizeof(int)*total_games,GFP_KERNEL);
+	if (!files_initialized) {
+		PRINT("KMALLOC FAILED!\n");
+		return -ENOMEM;
+	}
+	int i;
+	for (i=0; i<total_games; ++i)
+		files_initialized[i] = 0;	// No one has called open() yet
+	sema_init(&file_lock, 1);
+	
+	// Registration
+	major = register_chrdev(0, MODULE_NAME, &fops);
+	if (major < 0) {	// FAIL
+		PRINT("REGISTRATION FAILED, RETURN VALUE=%d\n",major);
+		kfree(files_initialized);
+		return major;
+	}
+	SET_MODULE_OWNER(&fops);
+	PRINT("EXITING INIT_MODULE, MAJOR=%d\n",major);
+	
+	return 0;
 	
 }
 
 void cleanup_module(void) {
+	
+	PRINT("IN CLEANUP_MODULE\n");
+	
+	// Un-registration
 	int ret = unregister_chrdev(major, MODULE_NAME);
-	if (ret<0) error stuff
+	if (ret<0)
+		printk("FATAL ERROR: unregister_chrdev() failed\n");
+	
+	// Structure cleanup 
+	kfree(files_initialized);
+	
 }
 
- 
+
