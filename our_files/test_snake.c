@@ -3,6 +3,8 @@
 #include <unistd.h>		// For fork() and close()
 #include <sys/wait.h>	// For wait()
 #include <errno.h>		// Guess
+#include <pthread.h>	// Testing with threads
+#include <semaphore.h>	// For use with threads
 #include <string.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -128,7 +130,7 @@ ASSERTS AND PRINTING
 			printf("%s",output); \
 		else \
 			printf("OK"); \
-		printf("\n"); \
+		printf(" \b\n"); \
 	} while(0)
  
 #define START_TESTS() do { \
@@ -152,7 +154,7 @@ ASSERTS AND PRINTING
 // When we reach 100% I expect to output OK or FAILURE, so no
 // need to output 100%... that's why I'm allowing 2 digits
 #define UPDATE_PROG(percent) do { \
-		printf("%2d%%\r",percent); \
+		printf("%2d%%\b\b\b",percent); \
 	} while(0)
 
 /* **************************************
@@ -309,11 +311,33 @@ bool open_release_open() {
 
 // Test race - create 10 threads to try to open the same game,
 // and make sure only two succeed each time.
-// Do that 10000 times (so if there is a deadlock situation, we might catch it).
+// Do that 1000 times (so if there is a deadlock situation, we might catch it).
 
 
 // Test the same thing, only with processes (forks)
-
+bool open_race_processes() {
+	long i;
+	for (i=0; i<1000; ++i) {
+		UPDATE_PROG(i/10);
+		SETUP(1,10);
+		if (child_num) {	// All 10 children should try to open files
+			fd = open("/dev/snake0",O_RDWR);
+			fd < 0? exit(1) : exit(0);	// Send the parent success status
+		}
+		else {				// The parent should read the exit status
+			int status;
+			char opened, failed;
+			opened = failed = 0;
+			while(wait(&status) != -1) {
+				WEXITSTATUS(status) ? ++failed : ++opened;
+			}
+			ASSERT(failed == 8);
+			ASSERT(opened == 2);
+		}
+		DESTROY();
+	}
+	return TRUE;
+}
 
 
 /*******************************************************************************************
@@ -334,6 +358,7 @@ int main() {
 	RUN_TEST(open_release_simple);
 	RUN_TEST(two_releases);
 	RUN_TEST(open_release_open);
+	RUN_TEST(open_race_processes);
 	END_TESTS();
 	
 	// That's all folks
