@@ -290,7 +290,7 @@ ErrorCode RandFoodLocation(Matrix *matrix)
 	{
 		p.x = rand() % N;
 		p.y = rand() % N;
-	} while (!IsAvailable(matrix, p) || IsMatrixFull(matrix));
+	} while (!(IsAvailable(matrix, p) || IsMatrixFull(matrix)));
 
 	if (IsMatrixFull(matrix))
 		return ERR_BOARD_FULL;
