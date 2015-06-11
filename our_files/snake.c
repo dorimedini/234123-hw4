@@ -280,6 +280,10 @@ loff_t our_llseek(struct file*, loff_t, int);
 // Module name
 #define MODULE_NAME "snake"
 
+// The minimal buffer size (in chars) for printing the board, with NULL termination.
+// Make this a macro so the size is known at compile-time.
+#define GOOD_BUF_SIZE (3*N*N+10*N+9)
+
 // Major number, and total number of games allowed (given as input)
 static int major = -1;
 static int max_games = 0;
@@ -314,7 +318,7 @@ struct file_operations fops_B = {
 // Checks to see if the game is in DESTROYED state
 static int is_destroyed(int minor) {
 	Game* game = games+minor;
-	down(&game->state_lock);
+	down_interruptible(&game->state_lock);
 	if (game->state == DESTROYED) {
 		up(&game->state_lock);
 		return 1;
@@ -326,7 +330,7 @@ static int is_destroyed(int minor) {
 // Destroys the game (changes the state)
 static void destroy_game(int minor) {
 	Game* game = games+minor;
-	down(&game->state_lock);
+	down_interruptible(&game->state_lock);
 	game->state = DESTROYED;
 	up(&game->state_lock);
 }
@@ -347,7 +351,7 @@ static void destroy_game(int minor) {
 static int get_winner(int minor) {
 	int ret;
 	Game* game = games+minor;
-	down(&game->state_lock);
+	down_interruptible(&game->state_lock);
 	switch(game->state) {
 		case PRE_START:
 		case ACTIVE:
@@ -370,10 +374,6 @@ static int get_winner(int minor) {
 	up(&game->state_lock);
 	return ret;
 }
-
-// Returns the minimal buffer size (in chars) for printing the board.
-// Make this a macro so the size is known at compile-time
-#define GOOD_BUF_SIZE 3*N*N+10*N+9
 
 // Use this to check if X - representing the number os chars in a buffer - 
 // is big enough to print the board.
@@ -437,7 +437,7 @@ int our_open(struct inode* i, struct file* filp) {
 	Game* game = games+minor;
 	
 	// If the game isn't willing to accept new players, exit in error
-	down(&game->state_lock);
+	down_interruptible(&game->state_lock);
 	if (game->state != PRE_START) {
 		up(&game->state_lock);
 		return -ENOSPC;
@@ -456,7 +456,7 @@ int our_open(struct inode* i, struct file* filp) {
 		else {
 			filp->f_op = &fops_B;				// Switch the writing function (so it knows I'm player 2)
 			PRINT("PLAYER 2 JOINED, CHANGING STATE\n");
-			down(&game->state_lock);			// Update game state
+			down_interruptible(&game->state_lock);			// Update game state
 			game->state = ACTIVE;
 			up(&game->state_lock);
 			PRINT("STATE CHANGED, SIGNALLING PLAYER 1 THAT PLAYER 2 HAS JOINED\n");
@@ -468,7 +468,7 @@ int our_open(struct inode* i, struct file* filp) {
 		filp->f_op = &fops_W;					// Switch the writing function (so it knows I'm player 1)
 		game->minor = minor;					// Inform the Game structure which minor it is
 		PRINT("PLAYER 1 JOINED, WAITING FOR PLAYER 2...\n");
-		down(&game->white_move);				// Wait for player 2 (blocking operation)
+		down_interruptible(&game->white_move);				// Wait for player 2 (blocking operation)
 		PRINT("PLAYER 1 DONE WAITING FOR PLAYER 2 TO JOIN\n");
 		up(&game->white_move);					// Signal the fact that it's my turn
 	}

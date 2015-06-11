@@ -9,12 +9,14 @@
 #include <fcntl.h>
 
 // --------------------------------IMPORTANT------------------------------------------------
-// After this comment, I've defined some macros that depend on my implementation: path names,
-// conventions and scripts.
+// These macros need to be redefined for your code:
+#define INSTALL_SCRIPT "/root/hw4/install.sh"
+#define UNINSTALL_SCRIPT "/root/hw4/uninstall.sh"
+#define NODE_NAME(n) "snake"#n
 // I'm assuming the scripts are called like this:
 //
-//	./install.sh 6		// Does insmod and mknod * 6
-//	./uninstall.sh		// Does rmmod and deletes created files
+//	./install.sh 6		// Does insmod and mknod * 6 (creates snake0,snake1,...,snake6 in /dev/)
+//	./uninstall.sh		// Does rmmod and deletes created files	(rm -f /dev/snake*)
 //
 // Where '6' is the max number of games (see setup_snake()).
 // To use this, write a script that behaves like the one above. Here is ours:
@@ -55,11 +57,6 @@ cd /root/hw4
 rm -f /dev/snake*
 rmmod snake
 ************************************** uninstall.sh ***************************************/
-// That's it. Have fun.
-#define INSTALL_SCRIPT "/root/hw4/install.sh"
-#define UNINSTALL_SCRIPT "/root/hw4/uninstall.sh"
-#define NODE_NAME(n) "snake"#n
-// Our node names are snake0, snake1... etc
 
 /*******************************************************************************************
  ===========================================================================================
@@ -85,15 +82,15 @@ typedef char bool;
 	#define PRINT(...)
 #endif
 
-// Set this to TRUE if a process has forked using FORK() at the beginning of a test.
-// That way, ASSERT()s know to call P_CLEANUP() before returning
+// This is set to TRUE if a process has forked using FORK() at the beginning of a test.
+// That way, ASSERT()s know to call P_CLEANUP() before returning.
 bool forked = FALSE;
 
-// Set this to TRUE if the module is in installed state. Also for use with ASSERT
+// This is set to TRUE if the module has been installed with setup_snake().
+// If you use ASSERT()s, this has to be set correctly!
+// Just use setup_snake() and destroy_snake() for that,
+// or better yet: SETUP() and DESTROY().
 bool installed = FALSE;
-
-// Set this to be the number of snake* files created (max games)
-#define MAX_GAMES 50
 
 /*******************************************************************************************
  ===========================================================================================
@@ -289,12 +286,32 @@ bool two_releases() {
 }
 
 // Test failure of open-release-open (can't re-open a game!)
+bool open_release_open() {
+	SETUP(1,1);
+	switch(child_num) {
+	case 0:
+	case 1:
+		fd = open("/dev/"NODE_NAME(0),O_RDWR);
+		ASSERT(fd >= 0);
+		ASSERT(!close(fd));
+		fd = open("/dev/"NODE_NAME(0),O_RDWR);
+		ASSERT(fd < 0);
+	}
+	DESTROY();
+	return TRUE;
+}
 
 // Test two different processes opening/releasing
+
+
 // Test two threads opening/releasing
+
+
 // Test race - create 10 threads to try to open the same game,
 // and make sure only two succeed each time.
 // Do that 10000 times (so if there is a deadlock situation, we might catch it).
+
+
 // Test the same thing, only with processes (forks)
 
 
@@ -312,11 +329,15 @@ int main() {
 	// Prevent output buffering, so we don't see weird shit when multiple processes are active
 	setbuf(stdout, NULL);
 	
-	// Test
+	// Test!
 	START_TESTS();
 	RUN_TEST(open_release_simple);
 	RUN_TEST(two_releases);
+	RUN_TEST(open_release_open);
 	END_TESTS();
+	
+	// That's all folks
 	return 0;
+	
 }
 
