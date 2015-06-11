@@ -4,6 +4,6 @@
 cd /root/hw4
 
 # Do some cleanup
-rm -f /dev/snake*
 rmmod snake
+rm -f /dev/snake*
 

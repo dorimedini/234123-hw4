@@ -11,7 +11,11 @@ if ! [[ $1 != *[!0-9]* ]]; then
    echo "Error: argument not a number. Usage: install.sh [TOTAL_GAMES]"; exit 2
 fi
 
-# Install the module (no cleanup or building)
+# Do some cleanup, and then build and install the module
+rm -f /dev/snake*
+rmmod snake
+make clean
+make
 insmod ./snake.o max_games=$1
 
 # Acquire the MAJOR number
