@@ -5,7 +5,7 @@ CFLAGS=-D__KERNEL__ -DMODULE -I$(KERNELDIR)/include -O -Wall
 all: snake.o
 
 test: snake.o test_snake.c
-	gcc -O -Wall test_snake.c -o test_snake
+	gcc -O -Wall -lpthread test_snake.c -o test_snake
 
 sandbox: snake.o sandbox.c
 	gcc -O -Wall sandbox.c -o sandbox

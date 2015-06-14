@@ -1,6 +1,8 @@
 #!/bin/bash
 
 # Go home
+cd /root
+mkdir -p hw4
 cd /root/hw4
 
 # Copy
