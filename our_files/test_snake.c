@@ -16,6 +16,7 @@
 // calling open() blocks the process
 bool open_release_simple() {
 	SETUP_P(1,1);
+	int fd;
 	switch(child_num) {
 	case 0:
 	case 1:
@@ -30,6 +31,7 @@ bool open_release_simple() {
 // Test failure of two releases (even after one open)
 bool two_releases_processes() {
 	SETUP_P(1,1);
+	int fd;
 	switch(child_num) {
 	case 0:
 	case 1:
@@ -71,6 +73,7 @@ bool two_releases_threads() {
 // Test failure of open-release-open (can't re-open a game!)
 bool open_release_open() {
 	SETUP_P(1,1);
+	int fd;
 	switch(child_num) {
 	case 0:
 	case 1:
@@ -88,7 +91,7 @@ bool open_release_open() {
 bool first_open_is_white() {
 	
 	// This may sometimes succeed, so try this many times
-	int i, trials = 50;
+	int i, fd, trials = 50;
 	for (i=0; i<trials; ++i) {
 		
 		UPDATE_PROG(i*100/trials);
@@ -174,7 +177,7 @@ bool open_race_processes() {
 		UPDATE_PROG(i*100/P_OPEN_RACE_TRIES);
 		SETUP_P(1,10);
 		if (child_num) {	// All 10 children should try to open files
-			fd = open("/dev/snake0",O_RDWR);
+			int fd = open("/dev/snake0",O_RDWR);
 			fd < 0 ? exit(1) : exit(0);	// Send the parent success status
 		}
 		else {				// The parent should read the exit status
@@ -214,11 +217,11 @@ void* games_race_func(void* arg) {
 	// First game successfully opened, update it's semaphore and return.
 	// If no game opened, update the last semaphore and return.
 	for(i=0; i<GAMES_RACE_T_NUM_GAMES; ++i) {
-		int file_d = open(get_node_name(game_numbers[i]),O_RDWR);
-		if (file_d >= 0) {
+		int fd = open(get_node_name(game_numbers[i]),O_RDWR);
+		if (fd >= 0) {
 			PROG_BUMP();
 			sem_post(p->sem_arr+game_numbers[i]);
-			close(file_d);
+			close(fd);
 			return NULL;
 		}
 	}
@@ -300,7 +303,92 @@ bool games_race_processes() {
 	return TRUE;
 }
 
+/* ***************************
+ READ TESTS
+*****************************/
 
+// Test multiple readers (asynchronous processes)
+bool many_readers_p() {
+	int i,num_tries = 50;
+	for (i=0; i<num_tries; ++i) {
+		
+	}
+	return TRUE;
+}
+
+// Test multiple readers (asynchronous threads)
+bool many_readers_t() {
+
+	return TRUE;
+}
+
+// Test multiple readers while there are multiple writers as well (processes)
+bool many_readers_while_writers_p() {
+
+	return TRUE;
+}
+
+// Test multiple readers while there are multiple writers as well (threads)
+bool many_readers_while_writers_t() {
+
+	return TRUE;
+}
+
+// Test multiple readers while there are multiple callers to read, write and ioctl (processes)
+bool many_readers_while_other_tasks_p() {
+
+	return TRUE;
+}
+
+// Test multiple readers while there are multiple callers to read, write and ioctl (threads)
+bool many_readers_while_other_tasks_t() {
+
+	return TRUE;
+}
+
+// Reading 0 bytes should return 0
+bool read_0_return_0() {
+
+	return TRUE;
+}
+
+// Reading N<GRIDSIZE bytes should return N
+bool read_N_lt_grid_returns_N() {
+
+	return TRUE;
+}
+
+// Reading N=GRIDSIZE bytes should return N and a complete grid (don't need NULL terminator)
+bool read_N_eq_grid_returns_N() {
+
+	return TRUE;
+}
+
+// Reading N>GRIDSIZE bytes should return GRIDSIZE and a complete grid, WITHOUT overwriting
+// byte number GRIDSIZE+1
+bool read_N_gt_grid_returns_grid() {
+
+	return TRUE;
+}
+
+// Reading after release() should return -1 with errno=10
+bool read_after_release() {
+
+	return TRUE;
+}
+
+// Readers while some are calling release(). Every successful reader should get the grid in
+// it's entirety (no partial read!), but it's OK to fail reading (return -1 and errno=10)
+bool many_readers_while_releasing_p() {
+
+	return TRUE;
+}
+
+// Same thing, but with threads
+bool many_readers_while_releasing_t() {
+
+	return TRUE;
+}
 
 /* ***************************
  GENERAL TESTS
@@ -310,7 +398,6 @@ bool error_after_release() {
 	
 	return TRUE;
 }
-
 
 /*******************************************************************************************
  ===========================================================================================
@@ -341,6 +428,8 @@ int main() {
 	RUN_TEST(open_race_processes);
 	RUN_TEST(games_race_threads);
 	RUN_TEST(games_race_processes);
+	
+	TEST_AREA("read");
 	
 	// That's all folks
 	END_TESTS();

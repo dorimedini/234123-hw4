@@ -77,14 +77,15 @@ typedef struct {
 
 typedef int Matrix[N][N];
 
-typedef int ErrorCode;
 // ERR_ILLEGAL_MOVE means the move was valid input but illegal in the game (loss)
-#define ERR_OK      			((ErrorCode) 0)
-#define ERR_BOARD_FULL			((ErrorCode)-1)
-#define ERR_SNAKE_IS_TOO_HUNGRY ((ErrorCode)-2)
-#define ERR_ILLEGAL_MOVE		((ErrorCode)-3)
-#define ERR_INVALID_MOVE		((ErrorCode)-4)
-#define ERR_SEGMENT_NOT_FOUND	((ErrorCode)-5)
+typedef enum {
+	ERR_OK,
+	ERR_BOARD_FULL,
+	ERR_SNAKE_IS_TOO_HUNGRY,
+	ERR_ILLEGAL_MOVE,
+	ERR_INVALID_MOVE,
+	ERR_SEGMENT_NOT_FOUND,
+} ErrorCode;
 
 
 static ErrorCode Init(Matrix*);
@@ -100,6 +101,8 @@ static int GetSize(Matrix*, Player);
 static ErrorCode CheckFoodAndMove(Matrix*, Player, Point);
 static void IncSizePlayer(Matrix*, Player, Point);
 static void AdvancePlayer(Matrix*, Player, Point);
+// Defined in the utility function area, needed in RandFoodLocation
+static int abs(int);
 
 static ErrorCode Init(Matrix *matrix) {
 	// Start by emptying everything
@@ -129,7 +132,6 @@ static bool IsAvailable(Matrix *matrix, Point p) {
 		((*matrix)[p.y][p.x] != EMPTY && (*matrix)[p.y][p.x] != FOOD));
 }
 
-#define ABS(x) if (x<0) x*=-1
 static ErrorCode RandFoodLocation(Matrix *matrix) {
 	Point p;
 	do {
@@ -205,12 +207,11 @@ static void Print(Matrix *matrix, char* buf, int size) {
 		BUF_W('-');
 	}
 	BUF_W('\n');							// +1
-	BUF_W('\0');							// +1
 	
 	// TOTAL BUFFER SIZE:
-	// (N+1)*3+1+N*(1+3*N+3)+(N+1)*3+1+1
-	//=3N+3+1+N+3NN+3N+3N+3+1+1
-	//=3NN+10N+9
+	// (N+1)*3+1+N*(1+3*N+3)+(N+1)*3+1
+	//=3N+3+1+N+3NN+3N+3N+3+1
+	//=3NN+10N+8
 	
 }
 
@@ -387,8 +388,7 @@ typedef struct game_t {
  *****************************/
 // Forward declarations
 int our_open(struct inode*, struct file*);
-int our_release_W(struct inode*, struct file*);
-int our_release_B(struct inode*, struct file*);
+int our_release(struct inode*, struct file*);
 ssize_t our_read(struct file*, char*, size_t, loff_t*);
 ssize_t our_write_W(struct file*, const char*, size_t, loff_t*);
 ssize_t our_write_B(struct file*, const char*, size_t, loff_t*);
@@ -401,7 +401,7 @@ loff_t our_llseek(struct file*, loff_t, int);
 
 // The minimal buffer size (in chars) for printing the board, with NULL termination.
 // Make this a macro so the size is known at compile-time.
-#define GOOD_BUF_SIZE (3*N*N+10*N+9)
+#define GOOD_BUF_SIZE (3*N*N+10*N+8)
 
 // Major number, and total number of games allowed (given as input)
 static int major = -1;
@@ -414,7 +414,7 @@ static Game games[256];
 // Different file operations for white or black players
 struct file_operations fops_W = {
 	.open=		our_open,
-	.release=	our_release_W,
+	.release=	our_release,
 	.read=		our_read,
 	.write=		our_write_W,
 	.llseek=	our_llseek,
@@ -423,7 +423,7 @@ struct file_operations fops_W = {
 };
 struct file_operations fops_B = {
 	.open=		our_open,
-	.release=	our_release_B,
+	.release=	our_release,
 	.read=		our_read,
 	.write=		our_write_B,
 	.llseek=	our_llseek,
@@ -476,10 +476,19 @@ static void destroy_game(int minor) {
 			return -10; \
 	} while(0)
 
-// Like the above macro, but for any non-ACTIVE state
-#define ASSERT_ACTIVE(minor) do { \
-		if (!is_active(minor)) \
+// Like the above macro, but for any non-ACTIVE state.
+// This is called via write_aux(), and we need to make sure all processes get the signal.
+// For example: two processes playing as the black player try to move while it's
+// the black player's turn. They both lock black_move. Then, the white player calls close().
+// Thus, black_move is signalled, but only one black process picks up the signal! While one
+// process exits in error from write_aux(), the other will be stuck...
+// To prevent this, signal before returning.
+#define ASSERT_ACTIVE(minor, is_black) do { \
+		if (!is_active(minor)) { \
+			Game* game = games+minor; \
+			up(is_black? &game->black_move : &game->white_move); \
 			return -10; \
+		} \
 	} while(0)
 
 // Use this to read the win state, as required for SNAKE_GET_WINNER
@@ -510,39 +519,22 @@ static int get_winner(int minor) {
 	return ret;
 }
 
-// Use this to check if X - representing the number os chars in a buffer - 
-// is big enough to print the board.
-// See Print() for the calculation.
-static bool big_enough_buf(int X) {
-	return (X >= GOOD_BUF_SIZE);
-}
-
 // Gets the minor number from a given file pointer
 static int get_minor(struct file *filp) {
 	return *((int*)filp->private_data);
 }
 
+// Updates the state of the game
+static void set_state(int minor, GameState state) {
+	Game* game = games+minor;
+	down_interruptible(&game->state_lock);
+	game->state = state;
+	up(&game->state_lock);
+}
+
 /* ****************************
  FOPS AUXILLARY FUNCTIONS
  *****************************/
-// Use this to simplify the release() functions
-static int our_release_aux(struct inode* i, bool is_black) {
-	
-	// Get minor
-	int minor = MINOR(i->i_rdev);
-	
-	// Destroy the game
-	destroy_game(minor);
-	
-	// Signal the other player, who may be waiting to move.
-	// If we don't do this, the other player may be trapped, forever
-	// waiting for his turn which won't come...
-	Game* game = games+minor;
-	is_black ? up(&game->white_move) : up(&game->black_move);
-	
-	return 0;
-	
-}
 
 // Use this to simplify the ioctl() functions
 static int our_ioctl_aux(struct inode* i, bool is_black, int cmd) {
@@ -588,8 +580,8 @@ static ssize_t our_write_aux(struct file *filp, const char *buf, size_t n, loff_
 		// return in error.
 		// This test should take care of what should happen if a player
 		// has more moves to write but the game is no longer playable.
-		// CHECK_DESTROYED(minor); Not enough
-		ASSERT_ACTIVE(minor);	// Much better
+		// CHECK_DESTROYED(minor);		// Not enough
+		ASSERT_ACTIVE(minor, is_black);	// Much better
 		
 		// Lock the grid and try to move.
 		// What happens next depends on the error code
@@ -601,18 +593,14 @@ static ssize_t our_write_aux(struct file *filp, const char *buf, size_t n, loff_
 		case ERR_OK: break;
 		// Board full: The move was legal and the board is now full! It's a tie
 		case ERR_BOARD_FULL: 
-			down_interruptible(&game->state_lock);
-			game->state = TIE;
-			up(&game->state_lock);
+			set_state(minor,TIE);
 			break;
 		// The rest of the states are loss states
 		case ERR_SNAKE_IS_TOO_HUNGRY:
 		case ERR_ILLEGAL_MOVE:
 		case ERR_INVALID_MOVE:
 		case ERR_SEGMENT_NOT_FOUND:
-			down_interruptible(&game->state_lock);
-			game->state = is_black ? W_WIN : B_WIN;
-			up(&game->state_lock);
+			set_state(minor, is_black ? W_WIN : B_WIN);
 			break;
 		}
 		
@@ -697,12 +685,27 @@ int our_open(struct inode* i, struct file* filp) {
 
 }
 
-int our_release_W(struct inode* i, struct file* filp) {
-	return our_release_aux(i,FALSE);
-}
-
-int our_release_B(struct inode* i, struct file* filp) {
-	return our_release_aux(i,TRUE);
+int our_release(struct inode* i, struct file* filp) {
+	
+	// Get minor
+	int minor = MINOR(i->i_rdev);
+	
+	// Destroy the game
+	destroy_game(minor);
+	
+	// Signal the other player, who may be waiting to move.
+	// If we don't do this, the other player may be trapped, forever
+	// waiting for his turn which won't come...
+	// Also signal myself. Maybe there are two processes playing as
+	// the same player, one releasing and one writing. If the writing
+	// process is waiting for it's turn, we should signal it here
+	// already...
+	Game* game = games+minor;
+	up(&game->white_move);
+	up(&game->black_move);
+	
+	return 0;
+	
 }
 
 ssize_t our_read(struct file *filp, char *buf, size_t n, loff_t *f_pos) {

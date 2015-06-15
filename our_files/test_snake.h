@@ -117,9 +117,17 @@ bool cloned = FALSE;
 bool installed = FALSE;
 
 // Use these for easier thread / process use. Used in macros.
+// Array of thread IDs
 pthread_t* tids=NULL;
+// Array of process IDs
 int* pids=NULL;
-int child_num=-1, total_threads=-1, total_semaphores=-1;
+// Which child (process) am I?
+int child_num=-1;
+// How many threads are there (needed for cleanup function)?
+int total_threads=-1;
+// How many semaphores are in the ThreadParam sent as an argument to the thread functions?
+int total_semaphores=-1;
+// Global thread param
 ThreadParam tp;
 
 // Use these for test progress
@@ -136,8 +144,14 @@ int total_progress_indicators=-1;
 /* **************************
 ASSERTS AND PRINTING
 ****************************/
-#define PRINT_WIDTH 40
+#define PRINT_WIDTH 50
 
+// ASSERT() uses P/T_CLEANUP() and destroy_snake(), so declare them here
+void P_CLEANUP();
+void T_CLEANUP();
+void destroy_snake();
+
+// If ASSERT() fails, it cleans up processes & threads and uninstalls the module
 #define ASSERT(cond) do { \
 		if (!(cond)) { \
 			if (forked) { \
@@ -150,7 +164,7 @@ ASSERTS AND PRINTING
 			} \
 			if (installed) \
 				destroy_snake(); \
-			sprintf(output, "FAILED, line %d: condition " #cond " is false",__LINE__); \
+			sprintf(output, "FAILED, line %d: condition (" #cond ") is false",__LINE__); \
 			return 0; \
 		} \
 	} while(0)
@@ -169,21 +183,21 @@ ASSERTS AND PRINTING
 		printf(" \b\n"); \
 	} while(0)
  
-#define START_TESTS() do { \
-		int i; \
-		for(i=0; i<PRINT_WIDTH; ++i) printf("="); \
-		printf("\nSTART TESTS\n"); \
-		for(i=0; i<PRINT_WIDTH; ++i) printf("="); \
-		printf("\n"); \
-	} while(0)
+void START_TESTS() {
+	int i;
+	for(i=0; i<PRINT_WIDTH; ++i) printf("=");
+	printf("\nSTART TESTS\n");
+	for(i=0; i<PRINT_WIDTH; ++i) printf("=");
+	printf("\n");
+}
  
-#define END_TESTS() do { \
-		int i; \
-		for(i=0; i<PRINT_WIDTH; ++i) printf("="); \
-		printf("\nDONE\n"); \
-		for(i=0; i<PRINT_WIDTH; ++i) printf("="); \
-		printf("\n"); \
-	} while(0)
+void END_TESTS() {
+	int i;
+	for(i=0; i<PRINT_WIDTH; ++i) printf("=");
+	printf("\nDONE\n");
+	for(i=0; i<PRINT_WIDTH; ++i) printf("=");
+	printf("\n");
+}
 
 #define TEST_AREA(name) do { \
 		int i; \
@@ -197,114 +211,28 @@ ASSERTS AND PRINTING
 // Some tests may be long (stress testers) so this is useful.
 // When we reach 100% I expect to output OK or FAILURE, so no
 // need to output 100%... that's why I'm allowing 2 digits
-#define UPDATE_PROG(percent) do { \
-		printf("%2d%%\b\b\b",percent); \
-	} while(0)
+void UPDATE_PROG(int percent) {
+	printf("%2d%%\b\b\b",percent);
+}
 
-#define PROG_SET(total) do { \
-		total_progress_indicators = total; \
-		total_progress = 0; \
-	} while(0)
+// Sets up a progress bar.
+// The 'total' sent is the amount of calls to PROG_BUMP() needed to get from 0% to 100%
+void PROG_SET(int total) {
+	total_progress_indicators = total;
+	total_progress = 0;
+}
 
-#define PROG_BUMP() do { \
-		UPDATE_PROG((total_progress++)*100/total_progress_indicators); \
-	} while(0)
-
-/* **************************************
-PROCESS / THREAD HANDLING
-****************************************/
-
-// Creates n processes. Starts by creating an array to store the IDs
-// and an integer to store which child you are.
-#define FORK(n) do { \
-		pids = (int*)malloc(sizeof(int)*n); \
-		child_num=0; \
-		if (n>0) forked = TRUE; \
-		int i; \
-		for (i=0; i<n; ++i) { \
-			pids[i] = fork(); \
-			if (!pids[i]) { \
-				child_num = i+1; \
-				break; \
-			} \
-		} \
-	} while(0)
-
-// Creates n clones. IDs (NOT INTEGERS!) are stored in tids[], and the function + parameter
-// sent to all threads is the same.
-#define CLONE(n,func,arg) \
-	tids = (pthread_t*)malloc(sizeof(pthread_t)*(n)); \
-	total_threads = n; \
-	if (n>0) cloned = TRUE; \
-	do { \
-		int i; \
-		for(i=0; i<total_threads; ++i) \
-			ASSERT(!pthread_create(tids + i, NULL, func, (void*)(arg))); \
-	} while(0)
-
-// Returns TRUE if the process is the father (uses child_num)
-#define P_IS_FATHER() ((bool)(!child_num))
-
-// Waits for all children
-#define P_WAIT() do { \
-		int status; \
-		while(wait(&status) != -1); \
-	} while(0)
-
-// Stops all processes except the father, who waits for them.
-#define P_CLEANUP() do { \
-		if (P_IS_FATHER()) P_WAIT(); \
-		else exit(0); \
-		free(pids); \
-		child_num = -1; \
-	} while(0)
-
-// Used by the main thread, to join (wait) for the clones.
-// Uses the tids[] array and the total_threads variable defined in CLONE()
-#define T_WAIT() do { \
-		int i; \
-		for (i=0; i<total_threads; ++i) \
-			pthread_join(tids[i],NULL); \
-	} while(0)
-			
-#define T_CLEANUP() do { \
-		int i; \
-		T_WAIT(); \
-		for (i=0; i<total_semaphores; ++i) \
-			sem_destroy(tp.sem_arr + i); \
-		free(tids); \
-		free(tp.sem_arr); \
-		total_threads = -1; \
-		total_semaphores = -1; \
-	} while(0)
-
-#define SETUP_P(games,procs) \
-	int fd; \
-	setup_snake(games); \
-	FORK(procs)
-
-#define DESTROY_P() \
-	P_CLEANUP(); \
-	destroy_snake();
-
-#define SETUP_T(games,threads,func,total_sems,sem_values) \
-	tp.sem_arr = (sem_t*)malloc(sizeof(sem_t)*(total_sems)); \
-	total_semaphores = total_sems; \
-	do { \
-		int i; \
-		for(i=0; i<total_sems; ++i) \
-			sem_init(tp.sem_arr + i, 0, sem_values[i]); \
-	} while(0); \
-	setup_snake(games); \
-	CLONE(threads,func,(void*)&tp)
-
-#define DESTROY_T() \
-	T_CLEANUP(); \
-	destroy_snake();
+// Updates the progress percentage, using total_progress and total_progress_indicators
+void PROG_BUMP() {
+	UPDATE_PROG((total_progress++)*100/total_progress_indicators);
+}
 
 /* **************************************
 SETUP
 ****************************************/
+
+// These need P_WAIT(), declare here
+void P_WAIT();
 
 // Installs the module with max_games = n
 void setup_snake(int n) {
@@ -331,6 +259,115 @@ void destroy_snake() {
 		P_WAIT();
 		installed = FALSE;
 	}
+}
+
+/* **************************************
+PROCESS / THREAD HANDLING
+****************************************/
+
+// Creates n processes. Starts by creating an array to store the IDs
+// and an integer to store which child you are.
+void FORK(int n) {
+	pids = (int*)malloc(sizeof(int)*n);
+	child_num=0;
+	if (n>0) forked = TRUE;
+	int i;
+	for (i=0; i<n; ++i) {
+		pids[i] = fork();
+		if (!pids[i]) {
+			child_num = i+1;
+			break;
+		}
+	}
+}
+
+// Creates n clones. IDs (NOT INTEGERS!) are stored in tids[], and the function + parameter
+// sent to all threads is the same.
+#define CLONE(n, func, arg) do { \
+		if (!CLONE_AUX(n, func, arg)) return FALSE; \
+	} while(0)
+
+bool CLONE_AUX(int n, void* (*func)(void*), void* arg) {
+	tids = (pthread_t*)malloc(sizeof(pthread_t)*(n));
+	total_threads = n;
+	if (n>0) cloned = TRUE;
+	int i;
+	for(i=0; i<total_threads; ++i)
+		ASSERT(!pthread_create(tids + i, NULL, func, arg));
+	return TRUE;
+}
+
+// Returns TRUE if the process is the father (uses child_num)
+bool P_IS_FATHER() {
+	return ((bool)(!child_num));
+}
+
+// Waits for all children
+void P_WAIT() {
+	int status;
+	while(wait(&status) != -1);
+}
+
+// Stops all processes except the father, who waits for them.
+void P_CLEANUP() {
+	if (P_IS_FATHER()) P_WAIT();
+	else exit(0);
+	free(pids);
+	child_num = -1;
+}
+
+// Used by the main thread, to join (wait) for the clones.
+// Uses the tids[] array and the total_threads variable defined in CLONE()
+void T_WAIT() {
+	int i;
+	for (i=0; i<total_threads; ++i)
+		pthread_join(tids[i],NULL);
+}
+			
+void T_CLEANUP() {
+	int i;
+	T_WAIT();
+	for (i=0; i<total_semaphores; ++i)
+		sem_destroy(tp.sem_arr + i);
+	free(tids);
+	free(tp.sem_arr);
+	total_threads = -1;
+	total_semaphores = -1;
+}
+
+// Installs the module with 'games' games and forks 'procs' times.
+// Including the father, there will be 'procs'+1 processes
+void SETUP_P(int games, int procs) {
+	setup_snake(games);
+	FORK(procs);
+}
+
+void DESTROY_P() {
+	P_CLEANUP();
+	destroy_snake();
+}
+
+// Installs the module with 'games' games, creates 'threads' threads with the func function
+// as the starting function. The argument sent is tp (ThreadParam), with 'total_sems' semaphores,
+// where semaphore[i] is initialized to sem_values[i].
+#define SETUP_T(games, threads, func, total_sems, sem_values) do { \
+		if (!SETUP_T_AUX(games, threads, func, total_sems, sem_values)) return FALSE; \
+	} while(0)
+
+bool SETUP_T_AUX(int games, int threads, void* (*func)(void*), int total_sems, int* sem_values) {
+	tp.sem_arr = (sem_t*)malloc(sizeof(sem_t)*(total_sems));
+	total_semaphores = total_sems;
+	int i;
+	for(i=0; i<total_sems; ++i)
+		sem_init(tp.sem_arr + i, 0, sem_values[i]);
+	setup_snake(games);
+	CLONE(threads,func,(void*)&tp);
+	return TRUE;
+}
+
+void DESTROY_T() {
+	T_CLEANUP();
+	destroy_snake();
 }
 
 /* **************************************
