@@ -15,32 +15,40 @@
 // Make sure two processes do it, otherwise one will be stuck forever...
 // calling open() blocks the process
 bool open_release_simple() {
-	SETUP_P(1,1);
-	int fd;
-	switch(child_num) {
-	case 0:
-	case 1:
-		fd = open(get_node_name(0),O_RDWR);
-		ASSERT(fd >= 0);
-		ASSERT(!close(fd));
+	int i, tries = 30;
+	for (i=0; i<tries; ++i) {
+		UPDATE_PROG(i*100/tries);
+		SETUP_P(1,1);
+		int fd;
+		switch(child_num) {
+		case 0:
+		case 1:
+			fd = open(get_node_name(0),O_RDWR);
+			ASSERT(fd >= 0);
+			ASSERT(!close(fd));
+		}
+		DESTROY_P();
 	}
-	DESTROY_P();
 	return TRUE;
 }
 
 // Test failure of two releases (even after one open)
 bool two_releases_processes() {
-	SETUP_P(1,1);
-	int fd;
-	switch(child_num) {
-	case 0:
-	case 1:
-		fd = open(get_node_name(0),O_RDWR);
-		ASSERT(fd >= 0);
-		ASSERT(!close(fd));
-		ASSERT(close(fd));
+	int i, tries = 30;
+	for (i=0; i<tries; ++i) {
+		UPDATE_PROG(i*100/tries);
+		SETUP_P(1,1);
+		int fd;
+		switch(child_num) {
+		case 0:
+		case 1:
+			fd = open(get_node_name(0),O_RDWR);
+			ASSERT(fd >= 0);
+			ASSERT(!close(fd));
+			ASSERT(close(fd));
+		}
+		DESTROY_P();
 	}
-	DESTROY_P();
 	return TRUE;
 }
 
@@ -48,9 +56,24 @@ bool two_releases_processes() {
 void* two_releases_func(void* arg) {
 	ThreadParam *tp = (ThreadParam*)arg;
 	int fd = open(get_node_name(0),O_RDWR);
-	if(fd < 0) sem_post(tp->sem_arr);				// Did I fail to open?
-	else if(!close(fd)) sem_post(tp->sem_arr+1);	// If not, did I fail to close?
-	else if(close(fd)) sem_post(tp->sem_arr+2);		// If not, can I close again?
+	int val;
+	if(fd < 0) {
+		sem_post(tp->sem_arr);			// Did I fail to open?
+		sem_getvalue(tp->sem_arr,&val);
+		PRINT("Couldn't open, val=%d\n",val);
+	}
+	else {
+		if(close(fd)) {
+			sem_post(tp->sem_arr+1);		// If not, did I fail to close?
+			sem_getvalue(tp->sem_arr+1,&val);
+			PRINT("Couldn't close, val=%d\n",val);
+		}
+		if(!close(fd)) {
+			sem_post(tp->sem_arr+2);		// If not, can I close again?
+			sem_getvalue(tp->sem_arr+2,&val);
+			PRINT("Closed again... val=%d\n",val);
+		}
+	}
 	return NULL;
 }
 bool two_releases_threads() {
@@ -58,32 +81,41 @@ bool two_releases_threads() {
 	// sem2 - how many threads failed to close once?
 	// sem3 - how many threads succeeded in closing twice?
 	int values[] = {0,0,0};
-	SETUP_T(1,2,two_releases_func,3,values);
-	int val;
-	sem_getvalue(tp.sem_arr,&val);
-	ASSERT(val == 0);
-	sem_getvalue(tp.sem_arr+1,&val);
-	ASSERT(val == 0);
-	sem_getvalue(tp.sem_arr+2,&val);
-	ASSERT(val == 0);
-	DESTROY_T();
+	int i, tries = 30;
+	for (i=0; i<tries; ++i) {
+		UPDATE_PROG(i*100/tries);
+		SETUP_T(1,2,two_releases_func,3,values);
+		T_WAIT();
+		int val;
+		sem_getvalue(tp.sem_arr,&val);
+		ASSERT(val == 0);
+		sem_getvalue(tp.sem_arr+1,&val);
+		ASSERT(val == 0);
+		sem_getvalue(tp.sem_arr+2,&val);
+		ASSERT(val == 0);
+		DESTROY_T();
+	}
 	return TRUE;
 }
 
 // Test failure of open-release-open (can't re-open a game!)
 bool open_release_open() {
-	SETUP_P(1,1);
-	int fd;
-	switch(child_num) {
-	case 0:
-	case 1:
-		fd = open(get_node_name(0),O_RDWR);
-		ASSERT(fd >= 0);
-		ASSERT(!close(fd));
-		fd = open(get_node_name(0),O_RDWR);
-		ASSERT(fd < 0);
+	int i, tries = 30;
+	for (i=0; i<tries; ++i) {
+		UPDATE_PROG(i*100/tries);
+		SETUP_P(1,1);
+		int fd;
+		switch(child_num) {
+		case 0:
+		case 1:
+			fd = open(get_node_name(0),O_RDWR);
+			ASSERT(fd >= 0);
+			ASSERT(!close(fd));
+			fd = open(get_node_name(0),O_RDWR);
+			ASSERT(fd < 0);
+		}
+		DESTROY_P();
 	}
-	DESTROY_P();
 	return TRUE;
 }
 
@@ -109,7 +141,6 @@ bool first_open_is_white() {
 			fd = open(get_node_name(0),O_RDWR);
 			ASSERT(fd >= 0);
 			usleep(10000);	// To prevent closing of a game before the white player can read the color
-			PRINT("Son closing\n");
 			close(fd);
 			break;
 		}
@@ -280,9 +311,9 @@ bool games_race_processes() {
 			// First game successfully opened, exit() with it's index.
 			// If no game opened, exit() with the last index.
 			for(i=0; i<GAMES_RACE_T_NUM_GAMES; ++i) {
-				int file_d = open(get_node_name(game_numbers[i]),O_RDWR);
-				if (file_d >= 0) {
-					close(file_d);
+				int fd = open(get_node_name(game_numbers[i]),O_RDWR);
+				if (fd >= 0) {
+					close(fd);
 					exit(game_numbers[i]);
 				}
 			}
@@ -306,87 +337,294 @@ bool games_race_processes() {
 /* ***************************
  READ TESTS
 *****************************/
-
 // Test multiple readers (asynchronous processes)
 bool many_readers_p() {
 	int i,num_tries = 50;
+	char buf[GOOD_BUF_SIZE+1];
+	buf[GOOD_BUF_SIZE] = '\0';	// So after read() we get a NULL-terminated string
 	for (i=0; i<num_tries; ++i) {
-		
+		UPDATE_PROG(i*100/num_tries);
+		SETUP_P(1,1);
+		// TWO PROCESSES DOING THIS CODE:
+		int j,num_reads = 10;		// Both processes: read lots of times
+		int fd = open(get_node_name(0),O_RDWR);
+		for(j=0; j<num_reads; ++j) {
+			ASSERT(read(fd,buf,GOOD_BUF_SIZE) == GOOD_BUF_SIZE);	// Make sure read() succeeds completely
+			ASSERT(is_good_init_grid(buf));
+		}
+		usleep(1000);	// Sleep 1ms, so the other process can read before we close()
+		close(fd);
+		// AFTER THIS, ONLY ONE PROCESS
+		DESTROY_P();
 	}
 	return TRUE;
 }
 
 // Test multiple readers (asynchronous threads)
+void* many_readers_func(void* arg) {
+	int fd = open(get_node_name(0),O_RDWR);
+	int i;
+	int num_reads = 10;			// Both threads: read lots of times
+	char buf[GOOD_BUF_SIZE+1];
+	buf[GOOD_BUF_SIZE] = '\0';	// So after read() we get a NULL-terminated string
+	for (i=0; i<num_reads; ++i) {
+		ASSERT(read(fd,buf,GOOD_BUF_SIZE) == GOOD_BUF_SIZE);	// Make sure read() succeeds completely
+		ASSERT(is_good_init_grid(buf));
+	}
+	usleep(1000);	// Sleep 1ms, so the other thread can read before we close()
+	close(fd);
+	return NULL;
+}
 bool many_readers_t() {
-
+	int i,num_tries = 50;
+	char buf[GOOD_BUF_SIZE+1];
+	buf[GOOD_BUF_SIZE] = '\0';	// So after read() we get a NULL-terminated string
+	for (i=0; i<num_tries; ++i) {
+		UPDATE_PROG(i*100/num_tries);
+		SETUP_T(1,2,many_readers_func,0,NULL);
+		DESTROY_T();
+	}
 	return TRUE;
 }
 
 // Test multiple readers while there are multiple writers as well (processes)
 bool many_readers_while_writers_p() {
-
+	int i,num_tries = 50;
+	char buf[GOOD_BUF_SIZE+1];
+	buf[GOOD_BUF_SIZE] = '\0';	// So after read() we get a NULL-terminated string
+	for (i=0; i<num_tries; ++i) {
+		UPDATE_PROG(i*100/num_tries);
+		SETUP_P(1,1);
+		// Only do K reads, because we want to move as well and not starve.
+		// Make the black player go UP->RIGHT->RIGHT->RIGHT and the white
+		// player go DOWN->RIGHT->RIGHT->RIGHT
+		int j;
+		int fd = open(get_node_name(0),O_RDWR);
+		for(j=0; j<4; ++j) {
+			char move = RIGHT + '0';
+			// No one wants to be Michael Jackson's baby.
+			// First move means it matters if we're black or white.
+			if (!j) {
+				move = (ioctl(fd,SNAKE_GET_COLOR,NULL) == WHITE_COLOR ? DOWN : UP) + '0';
+			}
+			ASSERT(write(fd,&move,1) == 1);
+			ASSERT(read(fd,buf,GOOD_BUF_SIZE) == GOOD_BUF_SIZE);	// Make sure read() succeeds completely
+			// I would test if the read is OK here if I could.
+			// Checking if a grid string is valid is an annoying thing to test...
+		}
+		// If I had the energy I'd use a barrier here.
+		// Anyway, wait enough time for both processes to stop R&W operations.
+		usleep(1000);
+		close(fd);
+		// AFTER THIS, ONLY ONE PROCESS
+		DESTROY_P();
+	}
 	return TRUE;
 }
 
 // Test multiple readers while there are multiple writers as well (threads)
+void* many_readers_while_writers_func(void* arg) {
+	ThreadParam *p = (ThreadParam*)arg;
+	int j;
+	int fd = open(get_node_name(0),O_RDWR);
+	char buf[GOOD_BUF_SIZE+1];
+	buf[GOOD_BUF_SIZE] = '\0';	// So after read() we get a NULL-terminated string
+	for(j=0; j<4; ++j) {
+		char move = RIGHT + '0';
+		// No one wants to be Michael Jackson's baby.
+		// First move means it matters if we're black or white.
+		if (!j)
+			move = (ioctl(fd,SNAKE_GET_COLOR,NULL) == WHITE_COLOR ? DOWN : UP) + '0';
+		ASSERT(write(fd,&move,1) == 1);
+		ASSERT(read(fd,buf,GOOD_BUF_SIZE) == GOOD_BUF_SIZE);	// Make sure read() succeeds completely
+		// I would test if the read is OK here if I could.
+		// Checking if a grid string is valid is an annoying thing to test...
+	}
+	// 2-thread barrier
+	if (!sem_trywait(p->sem_arr))	// First thread
+		sem_wait(p->sem_arr);
+	else							// Second thread
+		sem_post(p->sem_arr);
+	close(fd);
+	return NULL;
+}
 bool many_readers_while_writers_t() {
-
-	return TRUE;
-}
-
-// Test multiple readers while there are multiple callers to read, write and ioctl (processes)
-bool many_readers_while_other_tasks_p() {
-
-	return TRUE;
-}
-
-// Test multiple readers while there are multiple callers to read, write and ioctl (threads)
-bool many_readers_while_other_tasks_t() {
-
+	int i, num_tries=50;
+	for (i=0; i<num_tries; ++i) {
+		// One semaphore, to act as a thread barrier.
+		int vals[] = {1};
+		UPDATE_PROG(i*100/num_tries);
+		SETUP_T(1,2,many_readers_while_writers_func,1,vals);
+		DESTROY_T();
+	}
 	return TRUE;
 }
 
 // Reading 0 bytes should return 0
 bool read_0_return_0() {
-
+	SETUP_P(1,1);
+	int fd = open(get_node_name(0),O_RDWR);
+	ASSERT(read(fd,NULL,0) == 0);
+	usleep(1000);	// Prevent reading after someone closes
+	close(fd);
+	DESTROY_P();
 	return TRUE;
 }
 
 // Reading N<GRIDSIZE bytes should return N
 bool read_N_lt_grid_returns_N() {
-
+	// Test this by adding the last character '\n' and then checking the result
+	char buf[GOOD_BUF_SIZE+1];
+	buf[GOOD_BUF_SIZE]=buf[GOOD_BUF_SIZE-1]=buf[GOOD_BUF_SIZE-2]='x';	// Dummy character
+	SETUP_P(1,1);
+	int fd = open(get_node_name(0),O_RDWR);
+	ASSERT(read(fd,buf,GOOD_BUF_SIZE-1) == GOOD_BUF_SIZE-1);
+	ASSERT(buf[GOOD_BUF_SIZE] == 'x');	// Last two characters should be untouched,
+	ASSERT(buf[GOOD_BUF_SIZE-1] == 'x');// but the third-to-last character should have
+	ASSERT(buf[GOOD_BUF_SIZE-2] != 'x');// been overwritten.
+	buf[GOOD_BUF_SIZE-1]='\n';			// Edit the buffer to be a good grid
+	buf[GOOD_BUF_SIZE]='\0';
+	ASSERT(is_good_init_grid(buf));		// Test it
+	usleep(1000);
+	close(fd);
+	DESTROY_P();
 	return TRUE;
 }
 
 // Reading N=GRIDSIZE bytes should return N and a complete grid (don't need NULL terminator)
 bool read_N_eq_grid_returns_N() {
-
+	char buf[GOOD_BUF_SIZE+1];
+	buf[GOOD_BUF_SIZE]=buf[GOOD_BUF_SIZE-1]='x';	// Dummy character
+	SETUP_P(1,1);
+	int fd = open(get_node_name(0),O_RDWR);
+	ASSERT(read(fd,buf,GOOD_BUF_SIZE) == GOOD_BUF_SIZE);
+	ASSERT(buf[GOOD_BUF_SIZE] == 'x');	// Last character should be untouched, but the second-to-last
+	ASSERT(buf[GOOD_BUF_SIZE-1] != 'x');// character should have been overwritten.
+	buf[GOOD_BUF_SIZE]='\0';
+	ASSERT(is_good_init_grid(buf));		// Test it
+	usleep(1000);
+	close(fd);
+	DESTROY_P();
 	return TRUE;
 }
 
 // Reading N>GRIDSIZE bytes should return GRIDSIZE and a complete grid, WITHOUT overwriting
 // byte number GRIDSIZE+1
 bool read_N_gt_grid_returns_grid() {
-
+	char buf[GOOD_BUF_SIZE+10];
+	buf[GOOD_BUF_SIZE]=buf[GOOD_BUF_SIZE-1]='x';	// Dummy character
+	SETUP_P(1,1);
+	int fd = open(get_node_name(0),O_RDWR);
+	ASSERT(read(fd,buf,GOOD_BUF_SIZE+10) == GOOD_BUF_SIZE);
+	ASSERT(buf[GOOD_BUF_SIZE] == 'x');	// Last character should be untouched, but the second-to-last
+	ASSERT(buf[GOOD_BUF_SIZE-1] != 'x');// character should have been overwritten.
+	buf[GOOD_BUF_SIZE]='\0';
+	ASSERT(is_good_init_grid(buf));		// Test it
+	usleep(1000);
+	close(fd);
+	DESTROY_P();
 	return TRUE;
 }
 
 // Reading after release() should return -1 with errno=10
 bool read_after_release() {
-
+	char buf[GOOD_BUF_SIZE+1];
+	buf[GOOD_BUF_SIZE]=buf[GOOD_BUF_SIZE-1]='x';	// Dummy character
+	SETUP_P(1,1);
+	int fd = open(get_node_name(0),O_RDWR);
+	if (child_num) {
+		close(fd);
+		exit(0);
+	}
+	else wait(NULL);
+	ASSERT(read(fd,buf,GOOD_BUF_SIZE) == -1);
+	ASSERT(errno == 10);
+	close(fd);
+	DESTROY_P();
 	return TRUE;
 }
 
 // Readers while some are calling release(). Every successful reader should get the grid in
 // it's entirety (no partial read!), but it's OK to fail reading (return -1 and errno=10)
 bool many_readers_while_releasing_p() {
-
+	char buf[GOOD_BUF_SIZE+1] = {0};
+	int i, pid, fd, ret, passes = 50, k;
+	for (k=0; k<passes; ++k) {
+		UPDATE_PROG(k*100/passes);
+		setup_snake(1);
+		errno = 0;		// Make sure we don't read old values
+		pid = fork();
+		fd = open(get_node_name(0),O_RDWR);
+		if (pid) {
+			int j, tries = 50;
+			for (j=0; j<tries; ++j) {
+				ret = read(fd,buf,GOOD_BUF_SIZE);
+				if (ret<0) {	// If the game is closed, NOTHING should have been written
+					for (i=0; i<GOOD_BUF_SIZE; ++i)
+						ASSERT(buf[i] == 0);
+					ASSERT(errno == 10);
+					errno = 0;	// Make sure we don't read old values
+				}
+				else {			// Otherwise, a COMPLETE read should have been made
+					ASSERT(is_good_init_grid(buf));
+					--j;		// Keep at it, until the other process closes
+				}
+				for (i=0; i<GOOD_BUF_SIZE; ++i)
+					buf[i] = 0;	// Reset the buffer for the next pass
+			}
+		}
+		else {
+			usleep(500);
+			close(fd);
+			exit(0);
+		}
+		wait(NULL);
+		close(fd);
+		destroy_snake();
+	}
 	return TRUE;
 }
 
 // Same thing, but with threads
+void* many_readers_while_releasing_func(void* arg) {
+	char buf[GOOD_BUF_SIZE+1] = {0};
+	int i, j, ret;
+	int fd = open(get_node_name(0),O_RDWR);
+	if (ioctl(fd,SNAKE_GET_COLOR,NULL) == WHITE_COLOR) {
+		int tries = 50;
+		for (j=0; j<tries; ++j) {
+			ret = read(fd,buf,GOOD_BUF_SIZE);
+			if (ret<0) {	// If the game is closed, NOTHING should have been written
+				for (i=0; i<GOOD_BUF_SIZE; ++i)
+					ASSERT(buf[i] == 0);
+				ASSERT(errno == 10);
+				errno = 0;	// Make sure we don't read old values
+			}
+			else {			// Otherwise, a COMPLETE read should have been made.
+				ASSERT(is_good_init_grid(buf));
+				--j;		// Keep at it until the game closes...
+			}
+			for (i=0; i<GOOD_BUF_SIZE; ++i)
+				buf[i] = 0;	// Reset the buffer for the next pass
+		}
+	}
+	else {
+		usleep(500);	// Wait a bit, then close
+	}
+	close(fd);
+	return NULL;
+}
 bool many_readers_while_releasing_t() {
-
+	int passes = 50, k;
+	for (k=0; k<passes; ++k) {
+		UPDATE_PROG(k*100/passes);
+		setup_snake(1);
+		errno = 0;		// Make sure we don't read old values
+		CLONE(2,many_readers_while_releasing_func,NULL);
+		T_WAIT();
+		destroy_snake();
+	}
+	return TRUE;
 	return TRUE;
 }
 
@@ -430,6 +668,17 @@ int main() {
 	RUN_TEST(games_race_processes);
 	
 	TEST_AREA("read");
+	RUN_TEST(many_readers_p);
+	RUN_TEST(many_readers_t);
+	RUN_TEST(many_readers_while_writers_p);
+	RUN_TEST(many_readers_while_writers_t);
+	RUN_TEST(read_0_return_0);
+	RUN_TEST(read_N_lt_grid_returns_N);
+	RUN_TEST(read_N_eq_grid_returns_N);
+	RUN_TEST(read_N_gt_grid_returns_grid);
+	RUN_TEST(read_after_release);
+	RUN_TEST(many_readers_while_releasing_p);
+	RUN_TEST(many_readers_while_releasing_t);
 	
 	// That's all folks
 	END_TESTS();

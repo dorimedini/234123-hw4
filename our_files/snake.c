@@ -1,11 +1,12 @@
 #include "snake.h"
+#include "hw3q1.h"
 #include <linux/errno.h>
 #include <linux/module.h>
 #include <asm-i386/semaphore.h>
 #include <linux/fs.h>
-#include <linux/random.h>		// For get_random_bytes()
 #include <asm-i386/uaccess.h>	// For copy_to/from_user
-//#include <stdio.h>
+#include "hw3q1.h"				// For some definitions
+#include <linux/random.h>		// For get_random_bytes()
 MODULE_LICENSE("GPL");
 
 /*******************************************************************************************
@@ -39,72 +40,7 @@ MODULE_LICENSE("GPL");
  ===========================================================================================
  ===========================================================================================
  ******************************************************************************************/
-/*=========================================================================
-Constants and definitions:
-==========================================================================*/
-#define N (4) /* the size of the board */
-#define M (3)  /* the initial size of the snake */
-#define K (5)  /* the number of turns a snake can survive without eating */
-
-typedef char Player;
-/* PAY ATTENTION! i will use the fact that white is positive one and black is negative
-one to describe the segments of the snake. for example, if the white snake is 2 segments
-long and the black snake is 3 segments long
-white snake is  1   2
-black snake is -1  -2  -3 */
-#define WHITE ( 1) /* id to the white player */
-#define BLACK (-1) /* id to the black player */
-#define EMPTY ( 0) /* to describe an empty point */
-/* to describe a point with food. having the value this big guarantees that there will be no
-overlapping between the snake segments' numbers and the food id */
-#define FOOD  (N*N)
-
-typedef char bool;
-#define FALSE (0)
-#define TRUE  (1)
-
-typedef int Direction;
-#define DOWN  (2)
-#define LEFT  (4)
-#define RIGHT (6)
-#define UP    (8)
-
-/* a point in 2d space */
-typedef struct {
-	int x, y;
-} Point;
-
-
-typedef int Matrix[N][N];
-
-// ERR_ILLEGAL_MOVE means the move was valid input but illegal in the game (loss)
-typedef enum {
-	ERR_OK,
-	ERR_BOARD_FULL,
-	ERR_SNAKE_IS_TOO_HUNGRY,
-	ERR_ILLEGAL_MOVE,
-	ERR_INVALID_MOVE,
-	ERR_SEGMENT_NOT_FOUND,
-} ErrorCode;
-
-
-static ErrorCode Init(Matrix*);
-static bool IsAvailable(Matrix*, Point);
-static ErrorCode RandFoodLocation(Matrix*);
-static bool IsMatrixFull(Matrix*);
-static void Print(Matrix*, char*, int);
-static ErrorCode Update(Matrix*, Player, Direction);
-static ErrorCode GetInputLoc(Matrix*, Player, Point*, Direction);
-static ErrorCode GetSegment(Matrix*, int, Point*);
-static bool CheckTarget(Matrix*, Player, Point);
-static int GetSize(Matrix*, Player);
-static ErrorCode CheckFoodAndMove(Matrix*, Player, Point);
-static void IncSizePlayer(Matrix*, Player, Point);
-static void AdvancePlayer(Matrix*, Player, Point);
-// Defined in the utility function area, needed in RandFoodLocation
-static int abs(int);
-
-static ErrorCode Init(Matrix *matrix) {
+ErrorCode Init(Matrix *matrix) {
 	// Start by emptying everything
 	int i,j;
 	for (i=0; i<N; ++i)
@@ -123,7 +59,7 @@ static ErrorCode Init(Matrix *matrix) {
 	return ERR_OK;
 }
 
-static bool IsAvailable(Matrix *matrix, Point p) {
+bool IsAvailable(Matrix *matrix, Point p) {
 	return
 		/* is out of bounds */
 		!(p.x < 0 || p.x >(N - 1) ||
@@ -132,15 +68,15 @@ static bool IsAvailable(Matrix *matrix, Point p) {
 		((*matrix)[p.y][p.x] != EMPTY && (*matrix)[p.y][p.x] != FOOD));
 }
 
-static ErrorCode RandFoodLocation(Matrix *matrix) {
+ErrorCode RandFoodLocation(Matrix *matrix) {
 	Point p;
 	do {
 		get_random_bytes(&p.x,sizeof(int));
 		get_random_bytes(&p.y,sizeof(int));
+		p.x = p.x < 0? -p.x : p.x;
+		p.y = p.y < 0? -p.y : p.y;
 		p.x %= N;
 		p.y %= N;
-		p.x = abs(p.x);
-		p.y = abs(p.y);
 	} while (!(IsAvailable(matrix, p) || IsMatrixFull(matrix)));
 	
 	if (IsMatrixFull(matrix))
@@ -150,7 +86,7 @@ static ErrorCode RandFoodLocation(Matrix *matrix) {
 	return ERR_OK;
 }
 
-static bool IsMatrixFull(Matrix *matrix) {
+bool IsMatrixFull(Matrix *matrix) {
 	Point p;
 	for (p.x = 0; p.x < N; ++p.x)
 		for (p.y = 0; p.y < N; ++p.y)
@@ -167,7 +103,7 @@ static bool IsMatrixFull(Matrix *matrix) {
 		else return; \
 	} while(0)
 
-static void Print(Matrix *matrix, char* buf, int size) {
+void Print(Matrix *matrix, char* buf, int size) {
 	int i;
 	int j=0;
 	Point p;
@@ -215,7 +151,7 @@ static void Print(Matrix *matrix, char* buf, int size) {
 	
 }
 
-static ErrorCode Update(Matrix *matrix, Player player, Direction dir) {
+ErrorCode Update(Matrix *matrix, Player player, Direction dir) {
 	Point p;
 	ErrorCode e = GetInputLoc(matrix, player, &p, dir);
 	if(e != ERR_OK) return e;
@@ -229,7 +165,7 @@ static ErrorCode Update(Matrix *matrix, Player player, Direction dir) {
 	return ERR_OK;
 }
 
-static ErrorCode GetInputLoc(Matrix *matrix, Player player, Point* p, Direction dir) {
+ErrorCode GetInputLoc(Matrix *matrix, Player player, Point* p, Direction dir) {
 	if (dir != UP   && dir != DOWN && dir != LEFT && dir != RIGHT) {
 		return ERR_INVALID_MOVE;
 	}
@@ -246,7 +182,7 @@ static ErrorCode GetInputLoc(Matrix *matrix, Player player, Point* p, Direction 
 	return ERR_OK;
 }
 
-static ErrorCode GetSegment(Matrix *matrix, int segment, Point* out_p) {
+ErrorCode GetSegment(Matrix *matrix, int segment, Point* out_p) {
 	Point p;
 	/* just run through all the matrix */
 	for (p.x = 0; p.x < N; ++p.x) {
@@ -261,13 +197,13 @@ static ErrorCode GetSegment(Matrix *matrix, int segment, Point* out_p) {
 	return ERR_SEGMENT_NOT_FOUND;
 }
 
-static bool CheckTarget(Matrix *matrix, Player player, Point p) {
+bool CheckTarget(Matrix *matrix, Player player, Point p) {
 	/* is empty or is the tail of the snake (so it will move the next
 	to make place) */
 	return IsAvailable(matrix, p) || ((*matrix)[p.y][p.x] == player * GetSize(matrix, player));
 }
 
-static int GetSize(Matrix *matrix, Player player) {
+int GetSize(Matrix *matrix, Player player) {
 	/* check one by one the size */
 	Point p, next_p;
 	int segment = 0;
@@ -280,9 +216,9 @@ static int GetSize(Matrix *matrix, Player player) {
 	return (*matrix)[p.y][p.x] * player;
 }
 
-static ErrorCode CheckFoodAndMove(Matrix *matrix, Player player, Point p) {
-	static int white_counter = K;
-	static int black_counter = K;
+ErrorCode CheckFoodAndMove(Matrix *matrix, Player player, Point p) {
+	int white_counter = K;
+	int black_counter = K;
 	/* if the player did come to the place where there is food */
 	if ((*matrix)[p.y][p.x] == FOOD) {
 		if (player == BLACK) black_counter = K;
@@ -304,7 +240,7 @@ static ErrorCode CheckFoodAndMove(Matrix *matrix, Player player, Point p) {
 	return ERR_OK;
 }
 
-static void IncSizePlayer(Matrix *matrix, Player player, Point p) {
+void IncSizePlayer(Matrix *matrix, Player player, Point p) {
 	/* go from last to first so the identifier is always unique */
 	Point p_tmp;
 	int segment = GetSize(matrix, player)*player;
@@ -318,7 +254,7 @@ static void IncSizePlayer(Matrix *matrix, Player player, Point p) {
 	(*matrix)[p.y][p.x] = player;
 }
 
-static void AdvancePlayer(Matrix *matrix, Player player, Point p) {
+void AdvancePlayer(Matrix *matrix, Player player, Point p) {
 	/* go from last to first so the identifier is always unique */
 	Point p_tmp, p_tail;
 	GetSegment(matrix, GetSize(matrix, player) * player, &p_tail);
@@ -399,10 +335,6 @@ loff_t our_llseek(struct file*, loff_t, int);
 // Module name
 #define MODULE_NAME "snake"
 
-// The minimal buffer size (in chars) for printing the board, with NULL termination.
-// Make this a macro so the size is known at compile-time.
-#define GOOD_BUF_SIZE (3*N*N+10*N+8)
-
 // Major number, and total number of games allowed (given as input)
 static int major = -1;
 static int max_games = 0;
@@ -434,10 +366,6 @@ struct file_operations fops_B = {
 /* ****************************
  UTILITY FUNCTIONS
  *****************************/
-// Absolute value function
-static int abs(int x) {
-	return x<0 ? -x : x;
-}
 
 // Checks to see if the game is in the state sent
 static int in_state(int minor, GameState gs) {
@@ -715,6 +643,12 @@ ssize_t our_read(struct file *filp, char *buf, size_t n, loff_t *f_pos) {
 	
 	// Check if the operation is valid
 	CHECK_DESTROYED(minor);
+	
+	// If size=0, return 0 (successfully)
+	if (!n) return 0;
+	
+	// If the buffer is too large, make it smaller
+	n = n>GOOD_BUF_SIZE ? GOOD_BUF_SIZE : n;
 	
 	// Get the game and lock the grid, read the data, unlock
 	Game* game = games+minor;

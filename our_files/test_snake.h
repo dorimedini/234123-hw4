@@ -11,6 +11,7 @@
 #include <fcntl.h>
 #include <time.h>		// For time(), used in srand()
 #include "snake.h"		// For the ioctl functions
+#include "hw3q1.h"		// For some definitions
 #include <sys/ioctl.h>
 
 // Set this to 1 if you want to see the output of PRINT
@@ -80,11 +81,6 @@ rmmod snake
 
 // Error string output
 char output[256];
-
-// Boolean type
-typedef char bool;
-#define TRUE	((char)1)
-#define FALSE	((char)0)
 
 // Color types
 #define WHITE_COLOR 4
@@ -268,9 +264,11 @@ PROCESS / THREAD HANDLING
 // Creates n processes. Starts by creating an array to store the IDs
 // and an integer to store which child you are.
 void FORK(int n) {
-	pids = (int*)malloc(sizeof(int)*n);
+	if (n>0) {
+		pids = (int*)malloc(sizeof(int)*n);
+		forked = TRUE;
+	}
 	child_num=0;
-	if (n>0) forked = TRUE;
 	int i;
 	for (i=0; i<n; ++i) {
 		pids[i] = fork();
@@ -288,9 +286,11 @@ void FORK(int n) {
 	} while(0)
 
 bool CLONE_AUX(int n, void* (*func)(void*), void* arg) {
-	tids = (pthread_t*)malloc(sizeof(pthread_t)*(n));
+	if (n>0) {
+		tids = (pthread_t*)malloc(sizeof(pthread_t)*(n));
+		cloned = TRUE;
+	}
 	total_threads = n;
-	if (n>0) cloned = TRUE;
 	int i;
 	for(i=0; i<total_threads; ++i)
 		ASSERT(!pthread_create(tids + i, NULL, func, arg));
@@ -310,9 +310,12 @@ void P_WAIT() {
 
 // Stops all processes except the father, who waits for them.
 void P_CLEANUP() {
-	if (P_IS_FATHER()) P_WAIT();
-	else exit(0);
+	if (P_IS_FATHER())
+		P_WAIT();
+	else
+		exit(0);
 	free(pids);
+	pids = NULL;
 	child_num = -1;
 }
 
@@ -329,10 +332,13 @@ void T_CLEANUP() {
 	T_WAIT();
 	for (i=0; i<total_semaphores; ++i)
 		sem_destroy(tp.sem_arr + i);
-	free(tids);
-	free(tp.sem_arr);
+	if (total_threads > 0)
+		free(tids);
+	if (total_semaphores > 0)
+		free(tp.sem_arr);
 	total_threads = -1;
 	total_semaphores = -1;
+	tids = NULL;
 }
 
 // Installs the module with 'games' games and forks 'procs' times.
@@ -355,7 +361,8 @@ void DESTROY_P() {
 	} while(0)
 
 bool SETUP_T_AUX(int games, int threads, void* (*func)(void*), int total_sems, int* sem_values) {
-	tp.sem_arr = (sem_t*)malloc(sizeof(sem_t)*(total_sems));
+	if (total_sems > 0)
+		tp.sem_arr = (sem_t*)malloc(sizeof(sem_t)*(total_sems));
 	total_semaphores = total_sems;
 	int i;
 	for(i=0; i<total_sems; ++i)
@@ -369,6 +376,135 @@ void DESTROY_T() {
 	T_CLEANUP();
 	destroy_snake();
 }
+
+
+/* **************************************
+GRID FUNCTIONS
+****************************************/
+// Returns TRUE if the string (NULL-terminated) sent is a valid printout of
+// a grid after 0 moves.
+// Assumes N=4
+bool is_good_init_grid(char* str) {
+	if (strlen(str) > GOOD_BUF_SIZE)
+		return FALSE;
+	// Generic grid strings:
+	char grid_str[]="---------------\n"
+					"|  1  2  3  . |\n"
+					"|  .  .  .  . |\n"
+					"|  .  .  .  . |\n"
+					"| -1 -2 -3  . |\n"
+					"---------------\n";
+	// Indexes of grid_str[] where FOOD may be located
+	int food_locations[] = {28,35,38,41,44,51,54,57,60,76};
+	int i;
+	for (i=0; i<10; ++i) {
+		grid_str[food_locations[i]] = '*';
+		if (!strcmp(grid_str,str)) return TRUE;
+		grid_str[food_locations[i]] = '.';
+	}
+	return FALSE;
+}
+
+// Returns TRUE if the grid sent is a valid printout of a grid in ANY state.
+bool is_good_grid(char* str) {
+	if (strlen(str) > GOOD_BUF_SIZE)
+		return FALSE;
+	
+	// First, parse the grid into a Matrix object.
+	Matrix m;
+	
+	// A row of dashes:
+	int i;
+	for (i=0; i<(N+1)*3; ++i)
+		if (str[i] != '-')
+			return FALSE;
+	if (str[i++] != '\n')
+		return FALSE;
+	
+	// Each row starts with '|', then three characters defining the slot.
+	// Parse them.
+	int j,k;
+	for (j=0; j<N; ++j) {
+		if (str[i++] != '|')
+			return FALSE;
+		if (str[i++] != ' ')
+			return FALSE;
+		for (k=0; k<N; ++k) {
+			if (str[i++] == '-') {	// Black snake segment
+				if (str[i]-'0' < 0 || str[i]-'0' > N*N) return FALSE;	// Max snake size
+				m[j][k] = -(str[i]-'0');
+			}
+			else if (str[i-1] != ' ')
+				return FALSE;	// If it wasn't '-' it should have been ' '
+			else if (str[i] == '.')
+				m[j][k] = EMPTY;
+			else if (str[i] == '*')
+				m[j][k] = FOOD;
+			else if (str[i]-'0' >= 0 && str[i]-'0' <= N*N)
+				m[j][k] = str[i]-'0';	// White snake segment
+			else
+				return FALSE;	// No other options...
+			if (str[++i] != ' ')
+				return FALSE;	// Next slot should be a space character
+		}
+		if (str[++i] != '|' || str[++i] != '\n')
+			return FALSE;
+		++i;
+	}
+	
+	// Done parsing. The rest should be '-' characters, and one trailing '\n' character
+	while(i < GOOD_BUF_SIZE-1)
+		if (str[i++] != '-')
+			return FALSE;
+	if (str[i] != '\n')
+		return FALSE;
+	
+	// Make sure the grid makes sense.
+	
+	// Only one FOOD instance:
+	int total_food = 0;
+	for (i=0; i<N; ++i)
+		for (j=0; j<N; ++j)
+			if (m[i][j] == FOOD)
+				total_food++;
+	// If the board is full, it may have no food
+	if (total_food != 1 || (total_food == 0 && !IsMatrixFull(&m)))
+		return FALSE;
+	
+	// For each snake color, find the largest segment |X|.
+	// make sure all segments x=1,2,...,|X| exist exactly once and next to each other.
+	// Get the max segments:
+	int max_w=0,max_b=0;
+	for (i=0; i<N; ++i)
+		for (j=0; j<N; ++j)
+			if (m[i][j] != FOOD && m[i][j] != EMPTY) {
+				max_w = m[i][j] > max_w ? m[i][j] : max_w;
+				max_b = m[i][j] < max_b ? m[i][j] : max_b;
+			}
+	// Make sure they all exist exactly once, and next to each other:
+	int w_segs[max_w], b_segs[max_b];
+	for (i=0; i<max_w; ++i)
+		w_segs[i]=0;
+	for (i=0; i<max_b; ++i)
+		b_segs[i]=0;
+	for (i=1; i<=max_w; ++i)
+		for (j=0; j<N; ++j)
+			for (k=0; k<N; ++k)
+				if (m[j][k] == i) {
+					w_segs[i-1]++;
+					if (w_segs[i-1] > 1)
+						return FALSE;	// Too many segments
+					if (i>1) {	// Previous segment must be around here somewhere...
+						
+					}
+				}
+	// Same thing for black player
+	
+	
+	// That's it...
+	return TRUE;
+}
+
 
 /* **************************************
 GENERAL UTILITY
