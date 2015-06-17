@@ -1310,7 +1310,6 @@ bool move_to_tail() {
 	
 	int i, tries=100;
 	for (i=0; i<tries; ++i) {
-		PRINT("Try #%d\n",i+1);
 		UPDATE_PROG(i*100/tries);
 			
 		// To do this, keep trying until there is food at m[1][0] or m[1][1].
@@ -1326,11 +1325,9 @@ bool move_to_tail() {
 		if (P_IS_FATHER()) {
 			int move_num;
 			for (move_num = 1; move_num <= 3; move_num++) {
-				PRINT("White move number %d\n",move_num);
 				// Check the food stuff
 				read_and_parse(fd,&m);
 				if(move_num == 1 && m[1][0] != FOOD && m[1][1] != FOOD) {
-					PRINT("Killing...\n");
 					--i;
 					break;
 				}
@@ -1346,10 +1343,18 @@ bool move_to_tail() {
 					case 2: move = '6'; break;
 					case 3: move = '8'; break;
 				}
-				PRINT_BOARD(fd);
-				PRINT("Doing move '%c'\n",move);
 				ASSERT(write(fd,&move,1) == 1);				// Move OK
-				PRINT("Moved\n");
+				// If, by any chance, after we there is NO FOOD at location m[1][1],
+				// the black player moved+ate and then FOOD appeared at location m[1][1],
+				// this could cause us to fail the test...
+				// In this case, m[0][2]==5. Check for that.
+				if (move_num == 2) {
+					read_and_parse(fd,&m);
+					if (m[0][2] == 5) {
+						--i;
+						break;
+					}
+				}				
 				ASSERT(ioctl(fd,SNAKE_GET_WINNER) == -1);	// Nobody died
 			}
 			close(fd);
@@ -1357,6 +1362,7 @@ bool move_to_tail() {
 		else {
 			char moves[] = {'8','6','6'};
 			write(fd,moves,3);
+			usleep(1000);
 			close(fd);
 			exit(0);
 		}
@@ -1680,7 +1686,8 @@ bool multiple_white_writers() {
 	return TRUE;
 }
 
-// Writing with a NULL pointer should return EFAULT
+// Writing with a NULL pointer should return EFAULT,
+// unless count==0 in which case 0
 bool write_null_chars() {
 	SETUP_P(1,1);
 	int fd = open(get_node_name(0),O_RDWR);
@@ -1688,8 +1695,8 @@ bool write_null_chars() {
 	ASSERT(write(fd,NULL,1) == -1);
 	ASSERT(errno == EFAULT);
 	errno = 0;
-	ASSERT(write(fd,NULL,0) == -1);	// Even with 0 chars to write?
-	ASSERT(errno == EFAULT);
+	ASSERT(write(fd,NULL,0) == 0);	// This should be OK
+	ASSERT(errno == 0);
 	usleep(1000);
 	close(fd);
 	DESTROY_P();
@@ -2088,8 +2095,8 @@ int main() {
 	
 	// Test!
 	START_TESTS();
-	
-/*	TEST_AREA("open & release");
+/*	
+	TEST_AREA("open & release");
 	RUN_TEST(open_release_simple);
 	RUN_TEST(two_releases_processes);
 	RUN_TEST(two_releases_threads);
@@ -2123,8 +2130,8 @@ int main() {
 	RUN_TEST(read_ioctl_after_loss_and_then_write);
 	RUN_TEST(starve_to_death);
 	RUN_TEST(white_starves_first);
-*/	RUN_TEST(eat_and_starve_later);
-	RUN_TEST(move_to_tail);
+	RUN_TEST(eat_and_starve_later);
+*/	RUN_TEST(move_to_tail);
 /*	RUN_TEST(single_write_turns);
 	RUN_TEST(bulk_write_turns);
 	RUN_TEST(multiple_white_writers);
