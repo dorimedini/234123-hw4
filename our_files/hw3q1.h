@@ -1,6 +1,7 @@
 #ifndef _HW3Q1_H
 #define _HW3Q1_H
 
+
 /*=========================================================================
 Constants and definitions:
 ==========================================================================*/
@@ -58,14 +59,81 @@ bool IsAvailable(Matrix*, Point);
 ErrorCode RandFoodLocation(Matrix*);
 bool IsMatrixFull(Matrix*);
 void Print(Matrix*, char*, int);
-ErrorCode Update(Matrix*, Player, Direction);
+ErrorCode Update(Matrix*, Player, Direction, int*);
 ErrorCode GetInputLoc(Matrix*, Player, Point*, Direction);
 ErrorCode GetSegment(Matrix*, int, Point*);
 bool CheckTarget(Matrix*, Player, Point);
 int GetSize(Matrix*, Player);
-ErrorCode CheckFoodAndMove(Matrix*, Player, Point);
+ErrorCode CheckFoodAndMove(Matrix*, Player, Point, int*);
 void IncSizePlayer(Matrix*, Player, Point);
 void AdvancePlayer(Matrix*, Player, Point);
+
+
+bool IsMatrixFull(Matrix *matrix) {
+	Point p;
+	for (p.x = 0; p.x < N; ++p.x)
+		for (p.y = 0; p.y < N; ++p.y)
+			if ((*matrix)[p.y][p.x] == EMPTY || (*matrix)[p.y][p.x] == FOOD)
+				return FALSE;
+	
+	return TRUE;
+}
+
+
+// Print the grid, until the limit is reached
+#define BUF_W(char) do { \
+		if (j<size) \
+			buf[j++] = char; \
+		else return; \
+	} while(0)
+
+void Print(Matrix *matrix, char* buf, int size) {
+	int i;
+	int j=0;
+	Point p;
+	for (i = 0; i < N + 1; ++i) {				// (N+1)*3
+		BUF_W('-');
+		BUF_W('-');
+		BUF_W('-');
+	}
+	BUF_W('\n');							// 1
+	for (p.y = 0; p.y < N; ++p.y) {				// N*
+		BUF_W('|');								// 1+
+		for (p.x = 0; p.x < N; ++p.x) {				// N*
+			switch ((*matrix)[p.y][p.x]) {				// 3
+			case FOOD:
+				BUF_W(' ');
+				BUF_W(' ');
+				BUF_W('*');
+				break;
+			case EMPTY:
+				BUF_W(' ');
+				BUF_W(' ');
+				BUF_W('.');
+				break;
+			default:
+				BUF_W(' ');
+				BUF_W((*matrix)[p.y][p.x] < 0? '-' : ' ');
+				BUF_W((char)('0'+((*matrix)[p.y][p.x] < 0 ? -(*matrix)[p.y][p.x] : (*matrix)[p.y][p.x])));
+			}
+		}
+		BUF_W(' ');								// +3
+		BUF_W('|');
+		BUF_W('\n');
+	}											// Sub total: (N+1)*3+1+N*(1+3*N+3)
+	for (i = 0; i < N + 1; ++i) {				// (N+1)*3
+		BUF_W('-');
+		BUF_W('-');
+		BUF_W('-');
+	}
+	BUF_W('\n');							// +1
+	
+	// TOTAL BUFFER SIZE:
+	// (N+1)*3+1+N*(1+3*N+3)+(N+1)*3+1
+	//=3N+3+1+N+3NN+3N+3N+3+1
+	//=3NN+10N+8
+	
+}
 
 #endif /* _HW3Q1_H */
 
