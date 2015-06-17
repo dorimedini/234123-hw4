@@ -1308,7 +1308,7 @@ bool eat_and_starve_later() {
 bool move_to_tail() {
 	Matrix m;
 	
-	int i, tries=30;
+	int i, tries=100;
 	for (i=0; i<tries; ++i) {
 		PRINT("Try #%d\n",i+1);
 		UPDATE_PROG(i*100/tries);
@@ -1822,52 +1822,71 @@ bool many_listen_for_rival_close() {
 	char w_moves[] = {'2','6','6','6'};
 	int i;
 	for (i=0; i<4; ++i) {
-		UPDATE_PROG(i*100/4);
-		// White loser:
+		
+		// Once for the white player:
 		setup_snake(1);
-		int pid = fork();
-		if (!pid) usleep(500);	// Make sure the father is the white player
+		
+		// Fork, father should be the white player
+		int is_white = fork();
+		if (!is_white) usleep(500);
 		int fd = open(get_node_name(0),O_RDWR);
-		if (pid) {		// Father (white)
-			write(fd,w_moves,1);	// Do first move (down)
-			FORK(2);				// Make three white processes
-			write(fd,w_moves+1,1);	// Go right (three times)
+		
+		// White player moves down, then splits into 3,
+		// and each process moves right.
+		if (is_white) {
+			write(fd,w_moves,1);
+			int kids[2];
+			kids[0] = fork();
+			if (kids[0]) {
+				kids[1] = fork();
+			}
+			// Three children from here. Each one should move right.
+			write(fd,w_moves+1,1);
+			// Make the kids exit. They may close the game, so usleep() here
 			usleep(1000);
-			if (child_num)
-				exit(0);
-			close(fd);				// Make sure we get here
+			if (!kids[0] || !kids[1]) exit(0);
 		}
-		else {			// Child (black)
-			int ret = write(fd,b_moves,i);	// Write a little, and then close! Make sure the other player gets it...
-			usleep(500);
-			close(fd);
+		// Black player just calls close after moving i times
+		else {
+			write(fd,b_moves,i);	// Move a little, close fast (DONT WAIT), this
+			close(fd);				// is what we're testing
 			exit(0);
 		}
-		P_CLEANUP();
-		usleep(1000);
+		close(fd);		// Only the father gets here
+		while(wait(NULL) != -1);
 		destroy_snake();
-		// Black loser:
+		
+		// Once for the black player:
 		setup_snake(1);
-		pid = fork();
-		if (!pid) usleep(500);	// Make sure the father is the white player
+		
+		// Fork, father should be the black player
+		int is_black = fork();
+		if (is_black) usleep(500);
 		fd = open(get_node_name(0),O_RDWR);
-		if (pid) {		// Father (white)
-			write(fd,w_moves,i);	// Write a little, and then close! Make sure the other player gets it...
-			usleep(500);
-			close(fd);
-		}
-		else {			// Child (black)
-			write(fd,b_moves,1);	// Do first move (up)
-			FORK(2);				// Make three black processes
-			write(fd,b_moves+1,1);	// Go right (three times)
+		
+		// White player moves down, then splits into 3,
+		// and each process moves right.
+		if (is_black) {
+			write(fd,b_moves,1);
+			int kids[2];
+			kids[0] = fork();
+			if (kids[0]) {
+				kids[1] = fork();
+			}
+			// Three children from here. Each one should move right.
+			write(fd,b_moves+1,1);
+			// Make the kids exit. They may close the game, so usleep() here
 			usleep(1000);
-			if (child_num)
-				exit(0);
-			close(fd);				// Make sure we get here
+			if (!kids[0] || !kids[1]) exit(0);
+		}
+		// Black player just calls close after moving i times
+		else {
+			write(fd,w_moves,i);	// Move a little, close fast (DONT WAIT), this
+			close(fd);				// is what we're testing
 			exit(0);
 		}
-		P_CLEANUP();
-		usleep(1000);
+		close(fd);		// Only the father gets here
+		while(wait(NULL) != -1);
 		destroy_snake();
 	}
 	return TRUE;
@@ -1897,7 +1916,7 @@ bool many_listen_for_friendly_close() {
 		close(fd);				// Make sure we get here
 	}
 	else {			// Child (black)
-		int ret = write(fd,b_moves,4);	// Write a little, and then close! Make sure the other player gets it...
+		write(fd,b_moves,4);	// Write a little, and then close! Make sure the other player gets it...
 		usleep(1000);
 		close(fd);
 		exit(0);
@@ -1967,43 +1986,6 @@ bool hit_walls() {
 /* ***************************
  GENERAL TESTS
 *****************************/
-/*
-bool checkit() {
-	Matrix m;
-	CREATE_BUF();
-	int i;
-	for (i=0; i<3; ++i) {
-		m[0][i] = i+1;
-		m[3][i] = -(i+1);
-	}
-	m[0][3] = m[3][3]=EMPTY;
-	for (i=0; i<N; ++i)
-		m[1][i] = m[2][i] = EMPTY;
-	
-	// Two frist food locations
-	m[0][3] = FOOD;
-	Print(&m, buf, GOOD_BUF_SIZE);
-	ASSERT(is_good_init_grid(buf));
-	m[0][3] = EMPTY;
-	m[3][3] = FOOD;
-	ASSERT(is_good_init_grid(buf));
-	m[3][3] = EMPTY;
-	
-	// Test the rest
-	for (i=0; i<N; ++i) {
-		m[1][i] = FOOD;
-		Print(&m, buf, GOOD_BUF_SIZE);
-		ASSERT(is_good_init_grid(buf));
-		m[1][i] = EMPTY;
-		m[2][i] = FOOD;
-		Print(&m, buf, GOOD_BUF_SIZE);
-		ASSERT(is_good_init_grid(buf));
-		m[2][i] = EMPTY;
-	}
-	
-	return TRUE;
-}
-*/
 
 // GET_WINNER should return -1 if no one has won yet.
 bool no_winner_yet() {
@@ -2076,7 +2058,16 @@ bool color_fail_after_close() {
 
 // Make sure values other than SNAKE_GET_COLOR and SNAKE_GET_WINNER return ENOTTY
 bool ioctl_no_op() {
-	
+	SETUP_OPEN_SIMPLE(FALSE);
+	// I don't know what the numbers are, so just take some from far away
+	errno = 0;
+	ASSERT(ioctl(fd,1000) == -1);
+	ASSERT(errno == ENOTTY);
+	errno = 0;
+	ASSERT(ioctl(fd,-1000) == -1);
+	ASSERT(errno == ENOTTY);
+	DESTROY_CLOSE_SIMPLE();
+	return TRUE;
 }
 
 /*******************************************************************************************
@@ -2098,7 +2089,7 @@ int main() {
 	// Test!
 	START_TESTS();
 	
-	TEST_AREA("open & release");
+/*	TEST_AREA("open & release");
 	RUN_TEST(open_release_simple);
 	RUN_TEST(two_releases_processes);
 	RUN_TEST(two_releases_threads);
@@ -2132,9 +2123,9 @@ int main() {
 	RUN_TEST(read_ioctl_after_loss_and_then_write);
 	RUN_TEST(starve_to_death);
 	RUN_TEST(white_starves_first);
-	RUN_TEST(eat_and_starve_later);
+*/	RUN_TEST(eat_and_starve_later);
 	RUN_TEST(move_to_tail);
-	RUN_TEST(single_write_turns);
+/*	RUN_TEST(single_write_turns);
 	RUN_TEST(bulk_write_turns);
 	RUN_TEST(multiple_white_writers);
 	RUN_TEST(invalid_move_loses);
@@ -2144,7 +2135,7 @@ int main() {
 	RUN_TEST(write_N_chars);
 	RUN_TEST(write_N_then_loss);
 	RUN_TEST(single_listen_for_rival_close); 
-//	RUN_TEST(many_listen_for_rival_close);	// WHY DOESN'T THIS FUCKING WORK
+	RUN_TEST(many_listen_for_rival_close);	// WHY DOESN'T THIS FUCKING WORK
 	RUN_TEST(many_listen_for_friendly_close);
 	RUN_TEST(hit_walls);
 
@@ -2155,7 +2146,7 @@ int main() {
 	RUN_TEST(color_before_after_win);
 	RUN_TEST(color_fail_after_close);
 	RUN_TEST(ioctl_no_op);
-	
+*/	
 	// That's all folks
 	END_TESTS();
 	return 0;

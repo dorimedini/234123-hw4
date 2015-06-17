@@ -17,7 +17,7 @@ MODULE_LICENSE("GPL");
  ===========================================================================================
  ******************************************************************************************/
 // Set this to 1 for debug mode, or 0 for production
-#define HW4_DEBUG 1
+#define HW4_DEBUG 0
 
 // Conditional debug printing.
 // Important note: don't do PRINT("%d",++i) if you want i to be incremented in the production
@@ -306,6 +306,7 @@ struct file_operations fops_B = {
  UTILITY FUNCTIONS
  *****************************/
 // Nicely formats game state
+#if HW4_DEBUG
 static char* stringify_state(GameState gs) {
 	switch(gs) {
 	case PRE_START: return "PRE_START";
@@ -317,7 +318,7 @@ static char* stringify_state(GameState gs) {
 	}
 	return "NO_SUCH_STATE";
 }
-
+#endif /* HW4 DEBUG */
 
 // Checks to see if the game is in the state sent
 static int in_state(int minor, GameState gs) {
@@ -354,6 +355,9 @@ static void destroy_game(int minor) {
 #define CHECK_DESTROYED(minor) do { \
 		if (is_destroyed(minor)) { \
 			PRINT("GAME DESTROYED! %d RETURNING -10\n",current->pid); \
+			Game* game = games+minor; \
+			up(&game->black_move); \
+			up(&game->white_move); \
 			return -10; \
 		} \
 	} while(0)
@@ -467,11 +471,11 @@ static ssize_t our_write_aux(struct file *filp, const char *buf, size_t n, loff_
 	int minor = get_minor(filp);	// Get the minor number
 	CHECK_DESTROYED(minor);			// Make sure the game wasn't released
 	
-	// If the buffer is NULL, return EFAULT (Piazza 429)
-	if (!buf) return -EFAULT;
-	
 	// If n=0, return 0. It's legal.
 	if (!n) return 0;
+	
+	// If the buffer is NULL, return EFAULT (Piazza 429)
+	if (!buf) return -EFAULT;
 	
 	// Get the moves.
 	char moves[n];
