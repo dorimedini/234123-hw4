@@ -33,6 +33,7 @@ MODULE_LICENSE("GPL");
 #endif
 
 
+
 /*******************************************************************************************
  ===========================================================================================
  ===========================================================================================
@@ -59,11 +60,14 @@ ErrorCode Init(Matrix *matrix) {
 	return ERR_OK;
 }
 
+bool OutOfBounds(Point p) {
+	return (p.x < 0 || p.x >(N - 1) || p.y < 0 || p.y >(N - 1));
+}
+
 bool IsAvailable(Matrix *matrix, Point p) {
 	return
 		/* is out of bounds */
-		!(p.x < 0 || p.x >(N - 1) ||
-		p.y < 0 || p.y >(N - 1) ||
+		!(OutOfBounds(p) ||
 		/* is empty */
 		((*matrix)[p.y][p.x] != EMPTY && (*matrix)[p.y][p.x] != FOOD));
 }
@@ -86,79 +90,14 @@ ErrorCode RandFoodLocation(Matrix *matrix) {
 	return ERR_OK;
 }
 
-bool IsMatrixFull(Matrix *matrix) {
-	Point p;
-	for (p.x = 0; p.x < N; ++p.x)
-		for (p.y = 0; p.y < N; ++p.y)
-			if ((*matrix)[p.y][p.x] == EMPTY || (*matrix)[p.y][p.x] == FOOD)
-				return FALSE;
-	
-	return TRUE;
-}
-
-// Print the grid, until the limit is reached
-#define BUF_W(char) do { \
-		if (j<size) \
-			buf[j++] = char; \
-		else return; \
-	} while(0)
-
-void Print(Matrix *matrix, char* buf, int size) {
-	int i;
-	int j=0;
-	Point p;
-	for (i = 0; i < N + 1; ++i) {				// (N+1)*3
-		BUF_W('-');
-		BUF_W('-');
-		BUF_W('-');
-	}
-	BUF_W('\n');							// 1
-	for (p.y = 0; p.y < N; ++p.y) {				// N*
-		BUF_W('|');								// 1+
-		for (p.x = 0; p.x < N; ++p.x) {				// N*
-			switch ((*matrix)[p.y][p.x]) {				// 3
-			case FOOD:
-				BUF_W(' ');
-				BUF_W(' ');
-				BUF_W('*');
-				break;
-			case EMPTY:
-				BUF_W(' ');
-				BUF_W(' ');
-				BUF_W('.');
-				break;
-			default:
-				BUF_W(' ');
-				BUF_W((*matrix)[p.y][p.x] < 0? '-' : ' ');
-				BUF_W((char)('0'+abs((*matrix)[p.y][p.x])));
-			}
-		}
-		BUF_W(' ');								// +3
-		BUF_W('|');
-		BUF_W('\n');
-	}											// Sub total: (N+1)*3+1+N*(1+3*N+3)
-	for (i = 0; i < N + 1; ++i) {				// (N+1)*3
-		BUF_W('-');
-		BUF_W('-');
-		BUF_W('-');
-	}
-	BUF_W('\n');							// +1
-	
-	// TOTAL BUFFER SIZE:
-	// (N+1)*3+1+N*(1+3*N+3)+(N+1)*3+1
-	//=3N+3+1+N+3NN+3N+3N+3+1
-	//=3NN+10N+8
-	
-}
-
-ErrorCode Update(Matrix *matrix, Player player, Direction dir) {
+ErrorCode Update(Matrix *matrix, Player player, Direction dir, int* hunger_counter) {
 	Point p;
 	ErrorCode e = GetInputLoc(matrix, player, &p, dir);
 	if(e != ERR_OK) return e;
 	if (!CheckTarget(matrix, player, p)) {
 		return ERR_ILLEGAL_MOVE;
 	}
-	e = CheckFoodAndMove(matrix, player, p);
+	e = CheckFoodAndMove(matrix, player, p, hunger_counter);
 	if (e != ERR_OK) return e;							// Could also return ERR_BOARD_FULL. Also a tie.
 	if (IsMatrixFull(matrix)) return ERR_BOARD_FULL;	// Tie
 
@@ -200,7 +139,9 @@ ErrorCode GetSegment(Matrix *matrix, int segment, Point* out_p) {
 bool CheckTarget(Matrix *matrix, Player player, Point p) {
 	/* is empty or is the tail of the snake (so it will move the next
 	to make place) */
-	return IsAvailable(matrix, p) || ((*matrix)[p.y][p.x] == player * GetSize(matrix, player));
+	return (IsAvailable(matrix, p) || 
+			/* If it's out of bounds, don't check for the tail! */
+			(!OutOfBounds(p) && (*matrix)[p.y][p.x] == player * GetSize(matrix, player)));
 }
 
 int GetSize(Matrix *matrix, Player player) {
@@ -216,13 +157,10 @@ int GetSize(Matrix *matrix, Player player) {
 	return (*matrix)[p.y][p.x] * player;
 }
 
-ErrorCode CheckFoodAndMove(Matrix *matrix, Player player, Point p) {
-	int white_counter = K;
-	int black_counter = K;
+ErrorCode CheckFoodAndMove(Matrix *matrix, Player player, Point p, int* hunger_counter) {
 	/* if the player did come to the place where there is food */
 	if ((*matrix)[p.y][p.x] == FOOD) {
-		if (player == BLACK) black_counter = K;
-		if (player == WHITE) white_counter = K;
+		*hunger_counter = K;
 
 		IncSizePlayer(matrix, player, p);
 
@@ -230,10 +168,9 @@ ErrorCode CheckFoodAndMove(Matrix *matrix, Player player, Point p) {
 			return ERR_BOARD_FULL;	// Tie
 	}
 	else { /* check hunger */
-		if (player == BLACK && --black_counter == 0)
+		if (--(*hunger_counter) == 0) {
 			return ERR_SNAKE_IS_TOO_HUNGRY;
-		if (player == WHITE && --white_counter == 0)
-			return ERR_SNAKE_IS_TOO_HUNGRY;
+		}
 
 		AdvancePlayer(matrix, player, p);
 	}
@@ -315,8 +252,10 @@ typedef struct game_t {
 	Semaphore white_move;		// (RESOURCE #0) White player must lock this to move (signalled by black player)
 	Semaphore black_move;		// (RESOURCE #1) Black player must lock this to move (signalled by white player)
 	Semaphore state_lock;		// (RESOURCE #2) Protects the game_state field
-	Semaphore grid_lock;		// (RESOURCE #3) Protects the matrix field
+	Semaphore grid_lock;		// (RESOURCE #3) Protects the matrix field & hunger states of the players
 	GameState state;			// The state of the game
+	int white_hunger;			// These two are protected by grid_lock (used in the original snake game functions)
+	int black_hunger;
 } Game;
 
 /* ****************************
@@ -366,6 +305,19 @@ struct file_operations fops_B = {
 /* ****************************
  UTILITY FUNCTIONS
  *****************************/
+// Nicely formats game state
+static char* stringify_state(GameState gs) {
+	switch(gs) {
+	case PRE_START: return "PRE_START";
+	case ACTIVE: return "ACTIVE";
+	case W_WIN: return "W_WIN";
+	case B_WIN: return "B_WIN";
+	case TIE: return "TIE";
+	case DESTROYED: return "DESTROYED";
+	}
+	return "NO_SUCH_STATE";
+}
+
 
 // Checks to see if the game is in the state sent
 static int in_state(int minor, GameState gs) {
@@ -400,8 +352,10 @@ static void destroy_game(int minor) {
 // This macro return -10 from any function if the game identified by
 // the minor number has been destroyed.
 #define CHECK_DESTROYED(minor) do { \
-		if (is_destroyed(minor)) \
+		if (is_destroyed(minor)) { \
+			PRINT("GAME DESTROYED! %d RETURNING -10\n",current->pid); \
 			return -10; \
+		} \
 	} while(0)
 
 // Like the above macro, but for any non-ACTIVE state.
@@ -411,13 +365,32 @@ static void destroy_game(int minor) {
 // Thus, black_move is signalled, but only one black process picks up the signal! While one
 // process exits in error from write_aux(), the other will be stuck...
 // To prevent this, signal before returning.
-#define ASSERT_ACTIVE(minor, is_black) do { \
+#define ASSERT_ACTIVE(minor,moves) do { \
 		if (!is_active(minor)) { \
 			Game* game = games+minor; \
-			up(is_black? &game->black_move : &game->white_move); \
+			up(&game->black_move); \
+			up(&game->white_move); \
+			return moves; \
+		} \
+	} while(0)
+
+// Used to handle invalid input.
+// If the game was active when the input was sent, make the player lose.
+#define ASSERT_VALID_MOVE(minor,move,is_black) do { \
+		if (!is_valid_move(move)) { \
+			if (is_active(minor)) \
+				set_state(minor, is_black? W_WIN : B_WIN); \
+			Game* game = games+minor; \
+			up(&game->black_move); \
+			up(&game->white_move); \
 			return -10; \
 		} \
 	} while(0)
+
+// Invalid moves should always return error.
+static bool is_valid_move(char move) {
+	return (move == '2' || move == '4' || move == '6' || move == '8');
+}
 
 // Use this to read the win state, as required for SNAKE_GET_WINNER
 static int get_winner(int minor) {
@@ -478,11 +451,24 @@ static int our_ioctl_aux(struct inode* i, bool is_black, int cmd) {
 	}
 }
 
-// Use this to simplify the write() functions
+/**
+ * Use this to simplify the write() functions.
+ *
+ * RULE OF THUMB:
+ * - If the input is a legal move BUT we can't move (game over / destroyed), return the number
+ *   of moves successfully written (moved).
+ * - If the input is an illegal character (even if it came after some legal ones) return in error.
+ * - If the input is illegal AND the game is over/destroyed, return in error.
+ */
 static ssize_t our_write_aux(struct file *filp, const char *buf, size_t n, loff_t *f_pos, bool is_black) {
+	
+	PRINT("In write() with n=%d, %s player\n",n,is_black? "Black":"White");
 	
 	int minor = get_minor(filp);	// Get the minor number
 	CHECK_DESTROYED(minor);			// Make sure the game wasn't released
+	
+	// If the buffer is NULL, return EFAULT (Piazza 429)
+	if (!buf) return -EFAULT;
 	
 	// If n=0, return 0. It's legal.
 	if (!n) return 0;
@@ -494,28 +480,46 @@ static ssize_t our_write_aux(struct file *filp, const char *buf, size_t n, loff_
 	// If NOTHING was copied successfully, return in error.
 	if (ret == n) return -EFAULT;
 	
-	// Otherwise, perform n-ret moves (ret is the amount NOT copied, so n-ret WERE copied).
-	int i;
+	// Otherwise, perform (n-ret) moves (ret is the amount NOT copied, so n-ret WERE copied).
+	int current_move;
 	Game* game = games+minor;
-	for (i=0; i<n-ret; ++i) {
+	for (current_move=0; current_move<n-ret; ++current_move) {
+		
+		PRINT("In write with %s player (pid %d), move #%d is '%c'. Waiting for signal...\n",is_black? "Black":"White",current->pid,current_move+1,moves[current_move]);
 		
 		// Wait for our turn
 		down_interruptible(is_black? &game->black_move : &game->white_move);
 		
+		PRINT("In write with %s player, move #%d, locked the move lock\n",is_black? "Black":"White",current_move+1);
+		
 		// Check again for destruction state!
 		// This may have happened while we were waiting for our turn.
 		// Either way, if a player tries to move in a non-active game,
-		// return in error.
-		// This test should take care of what should happen if a player
-		// has more moves to write but the game is no longer playable.
-		// CHECK_DESTROYED(minor);		// Not enough
-		ASSERT_ACTIVE(minor, is_black);	// Much better
+		// return
+		CHECK_DESTROYED(minor);
+		
+		PRINT("In write with %s player, move #%d, game is active\n",is_black? "Black":"White",current_move+1);
+		
+		// If this is an illegal move, return in error.
+		// This should happen BEFORE testing if the game is active!
+		ASSERT_VALID_MOVE(minor,moves[current_move],is_black);
+		
+		// If the game is over, return NOW with the number of written moves.
+		ASSERT_ACTIVE(minor, current_move);
 		
 		// Lock the grid and try to move.
 		// What happens next depends on the error code
 		down_interruptible(&game->grid_lock);
-		ErrorCode e = Update(&game->matrix, is_black ? BLACK : WHITE, (int)(moves[i]-'0'));
+		ErrorCode e = Update(
+							&game->matrix,
+							is_black ? BLACK : WHITE,
+							(int)(moves[current_move]-'0'),
+							is_black? &game->black_hunger : &game->white_hunger
+						);
 		up(&game->grid_lock);
+		
+		PRINT("In write with %s player, move #%d, update return value is %d\n",is_black? "Black":"White",current_move+1,e);
+		
 		switch(e) {
 		// OK: Nothing to do
 		case ERR_OK: break;
@@ -526,19 +530,28 @@ static ssize_t our_write_aux(struct file *filp, const char *buf, size_t n, loff_
 		// The rest of the states are loss states
 		case ERR_SNAKE_IS_TOO_HUNGRY:
 		case ERR_ILLEGAL_MOVE:
-		case ERR_INVALID_MOVE:
+		case ERR_INVALID_MOVE:	// This shouldn't happen, we've checked...
 		case ERR_SEGMENT_NOT_FOUND:
 			set_state(minor, is_black ? W_WIN : B_WIN);
 			break;
 		}
+
+		PRINT("%s player signalling...\n",is_black? "Black":"White");
 		
-		// Signal the other player it's her turn
-		up(is_black ? &game->white_move : &game->black_move);
+		// Anyway, if the error code wasn't ERR_OK, the game is over so we can release both players.
+		if (e != ERR_OK) {
+			up(&game->black_move);
+			up(&game->white_move);
+		}
+		else {
+			// Signal the other player it's her turn
+			up(is_black ? &game->white_move : &game->black_move);\
+		}
 		
 	}
 	
-	// Done moving! Return the number of written bytes (i)
-	return i;
+	// Done moving! Return the number of written bytes (current_move)
+	return current_move;
 	
 }
 
@@ -615,6 +628,8 @@ int our_open(struct inode* i, struct file* filp) {
 
 int our_release(struct inode* i, struct file* filp) {
 	
+	PRINT("In release()\n");
+	
 	// Get minor
 	int minor = MINOR(i->i_rdev);
 	
@@ -628,6 +643,7 @@ int our_release(struct inode* i, struct file* filp) {
 	// the same player, one releasing and one writing. If the writing
 	// process is waiting for it's turn, we should signal it here
 	// already...
+	PRINT("Signalling both players...\n");
 	Game* game = games+minor;
 	up(&game->white_move);
 	up(&game->black_move);
@@ -644,11 +660,11 @@ ssize_t our_read(struct file *filp, char *buf, size_t n, loff_t *f_pos) {
 	// Check if the operation is valid
 	CHECK_DESTROYED(minor);
 	
+	// Piazza 429:
+	if (!buf) return -EFAULT;
+	
 	// If size=0, return 0 (successfully)
 	if (!n) return 0;
-	
-	// If the buffer is too large, make it smaller
-	n = n>GOOD_BUF_SIZE ? GOOD_BUF_SIZE : n;
 	
 	// Get the game and lock the grid, read the data, unlock
 	Game* game = games+minor;
@@ -656,6 +672,13 @@ ssize_t our_read(struct file *filp, char *buf, size_t n, loff_t *f_pos) {
 	char our_buf[n];
 	Print(&game->matrix, our_buf, n);
 	up(&game->grid_lock);
+	
+	// If the buffer is too large, leave trailing zeros
+	if (n>GOOD_BUF_SIZE) {
+		int i;
+		for(i=GOOD_BUF_SIZE; i<n; ++i)
+			our_buf[i] = 0;
+	}
 	
 	// Copy the data to the user.
 	// If it fails completely (n bytes not written), return EFAULT.
@@ -667,13 +690,16 @@ ssize_t our_read(struct file *filp, char *buf, size_t n, loff_t *f_pos) {
 }
 
 ssize_t our_write_W(struct file *filp, const char *buf, size_t n, loff_t *f_pos) {
-	return our_write_aux(filp, buf, n, f_pos, FALSE);
+	int ret = our_write_aux(filp, buf, n, f_pos, FALSE);
+	PRINT("%d IN OUR_WRITE_W, RETURNED %d\n",current->pid,ret);
+	return ret;
 }
 
 ssize_t our_write_B(struct file *filp, const char *buf, size_t n, loff_t *f_pos) {
-	return our_write_aux(filp, buf, n, f_pos, TRUE);
+	int ret = our_write_aux(filp, buf, n, f_pos, TRUE);
+	PRINT("%d IN OUR_WRITE_B, RETURNED %d\n",current->pid,ret);
+	return ret;
 }
-
 
 
 int our_ioctl_W(struct inode *i, struct file *filp, unsigned int cmd, unsigned long arg) {
@@ -702,6 +728,8 @@ int init_module(void) {
 		// Initialize other fields
 		games[i].state = PRE_START;				// No one has called open() yet
 		games[i].minor = -1;					// No minor number yet
+		games[i].white_hunger = K;				// Both snakes are healthy & happy
+		games[i].black_hunger = K;				// ...BUT NOT FOR LONG
 		sema_init(&games[i].state_lock, 1);		// We need locks for each game
 		sema_init(&games[i].grid_lock, 1);		// Player must lock this successfully to r/w the game grid
 		sema_init(&games[i].white_move, 0);		// White player must lock this to move (signalled by black player)
