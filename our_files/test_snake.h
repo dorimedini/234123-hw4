@@ -21,6 +21,9 @@
 // These macros / functions need to be redefined for your code:
 #define INSTALL_SCRIPT "/root/hw4/install.sh"
 #define UNINSTALL_SCRIPT "/root/hw4/uninstall.sh"
+// Error values. You may choose what they should be
+#define ERRNO_INVALID_MOVE_ACTIVE_GAME 10
+#define ERRNO_INVALID_MOVE_INACTIVE_GAME 10
 char node_name[20];
 char* get_node_name(int minor) {
 	sprintf(node_name,"/dev/snake%d",minor);
@@ -95,9 +98,11 @@ typedef struct {
 #if HW4_TEST_DEBUG
 	#define PRINT(...) printf(__VA_ARGS__)
 	#define PRINT_IF(cond,...) if(cond) PRINT(__VA_ARGS__)
+	#define PRINT_BOARD(fd) print_board(fd)
 #else
 	#define PRINT(...)
 	#define PRINT_IF(...)
+	#define PRINT_BOARD(fd)
 #endif
 
 // This is set to TRUE if a process has forked using FORK() at the beginning of a test.
@@ -224,7 +229,7 @@ void PROG_BUMP() {
 }
 
 /* **************************************
-SETUP
+ MODULE SETUP
 ****************************************/
 
 // These need P_WAIT(), declare here
@@ -258,7 +263,7 @@ void destroy_snake() {
 }
 
 /* **************************************
-PROCESS / THREAD HANDLING
+ PROCESS / THREAD HANDLING
 ****************************************/
 
 // Creates n processes. Starts by creating an array to store the IDs
@@ -310,14 +315,17 @@ void P_WAIT() {
 
 // Stops all processes except the father, who waits for them.
 void P_CLEANUP() {
-	if (P_IS_FATHER())
+	if (P_IS_FATHER()) {
 		P_WAIT();
-	else
+	}
+	else {
 		exit(0);
+	}
 	free(pids);
 	pids = NULL;
 	child_num = -1;
 }
+
 
 // Used by the main thread, to join (wait) for the clones.
 // Uses the tids[] array and the total_threads variable defined in CLONE()
@@ -348,10 +356,23 @@ void SETUP_P(int games, int procs) {
 	FORK(procs);
 }
 
+// Simple single-game double-process setup.
+// If force==TRUE, makes sure the father is the white player.
+#define SETUP_OPEN_SIMPLE(force) \
+	SETUP_P(1,1); \
+	if (force && !P_IS_FATHER()) usleep(500); \
+	int fd = open(get_node_name(0),O_RDWR)
+
 void DESTROY_P() {
 	P_CLEANUP();
 	destroy_snake();
 }
+
+#define DESTROY_CLOSE_SIMPLE() do { \
+		usleep(1000); \
+		close(fd); \
+		DESTROY_P(); \
+	} while(0)
 
 // Installs the module with 'games' games, creates 'threads' threads with the func function
 // as the starting function. The argument sent is tp (ThreadParam), with 'total_sems' semaphores,
@@ -377,6 +398,24 @@ void DESTROY_T() {
 	destroy_snake();
 }
 
+/* **************************************
+GENERAL UTILITY
+****************************************/
+// Creates a buffer called buf[] of size GOOD_BUF_SIZE+1, and adds a NULL terminator
+#define CREATE_BUF() \
+	char buf[GOOD_BUF_SIZE+1]; \
+	buf[GOOD_BUF_SIZE] = '\0'
+
+// Shuffles the contents of the given array.
+void shuffle_arr(int* arr, int n) {
+	int i;
+	for (i=0; i<n; ++i) {
+		int j = i + rand()%(n-i);
+		int tmp = arr[i];
+		arr[i]=arr[j];
+		arr[j]=tmp;
+	}
+}
 
 /* **************************************
 GRID FUNCTIONS
@@ -405,119 +444,239 @@ bool is_good_init_grid(char* str) {
 	return FALSE;
 }
 
-// Returns TRUE if the grid sent is a valid printout of a grid in ANY state.
-bool is_good_grid(char* str) {
-	if (strlen(str) > GOOD_BUF_SIZE)
-		return FALSE;
+// Reads an output string from Print() and parses it into a Matrix.
+// If the output string is bad, returns FALSE.
+// DOES NOT detect if the board is in a 'logical' state. For example,
+// there may be two FOODs on the board, and this function would still
+// return TRUE.
+bool parse_board(char* str, Matrix* mat) {
 	
-	// First, parse the grid into a Matrix object.
-	Matrix m;
+	if (strlen(str) > GOOD_BUF_SIZE) {
+		return FALSE;
+	}
 	
 	// A row of dashes:
 	int i;
 	for (i=0; i<(N+1)*3; ++i)
-		if (str[i] != '-')
+		if (str[i] != '-') {
 			return FALSE;
-	if (str[i++] != '\n')
+		}
+	if (str[i++] != '\n') {
 		return FALSE;
+	}
 	
 	// Each row starts with '|', then three characters defining the slot.
 	// Parse them.
 	int j,k;
 	for (j=0; j<N; ++j) {
-		if (str[i++] != '|')
+		if (str[i++] != '|') {
 			return FALSE;
-		if (str[i++] != ' ')
+		}
+		if (str[i++] != ' ') {
 			return FALSE;
+		}
 		for (k=0; k<N; ++k) {
 			if (str[i++] == '-') {	// Black snake segment
-				if (str[i]-'0' < 0 || str[i]-'0' > N*N) return FALSE;	// Max snake size
-				m[j][k] = -(str[i]-'0');
+				if (str[i]-'0' < 0 || str[i]-'0' > N*N) {
+					return FALSE;	// Max snake size
+				}
+				(*mat)[j][k] = -(str[i]-'0');
 			}
-			else if (str[i-1] != ' ')
+			else if (str[i-1] != ' ') {
 				return FALSE;	// If it wasn't '-' it should have been ' '
-			else if (str[i] == '.')
-				m[j][k] = EMPTY;
-			else if (str[i] == '*')
-				m[j][k] = FOOD;
-			else if (str[i]-'0' >= 0 && str[i]-'0' <= N*N)
-				m[j][k] = str[i]-'0';	// White snake segment
-			else
+			}
+			else if (str[i] == '.') {
+				(*mat)[j][k] = EMPTY;
+			}
+			else if (str[i] == '*') {
+				(*mat)[j][k] = FOOD;
+			}
+			else if (str[i]-'0' >= 0 && str[i]-'0' <= N*N) {
+				(*mat)[j][k] = str[i]-'0';	// White snake segment
+			}
+			else {
 				return FALSE;	// No other options...
+			}
 			if (str[++i] != ' ')
 				return FALSE;	// Next slot should be a space character
+			++i;	// Advance for next round
 		}
-		if (str[++i] != '|' || str[++i] != '\n')
+		if (str[i++] != '|') {
 			return FALSE;
-		++i;
+		}
+		if (str[i++] != '\n') {
+			return FALSE;
+		}
 	}
 	
 	// Done parsing. The rest should be '-' characters, and one trailing '\n' character
-	while(i < GOOD_BUF_SIZE-1)
-		if (str[i++] != '-')
+	while(i < GOOD_BUF_SIZE-1) {
+		if (str[i++] != '-') {
 			return FALSE;
-	if (str[i] != '\n')
+		}
+	}
+	if (str[i] != '\n') {
 		return FALSE;
+	}
+		
+	return TRUE;
+}
+
+// Stores the adjacent location of the given value in the pointers.
+// Returns FALSE if the value isn't next to the point given
+bool get_adjacent(Matrix* m, int x, int y, int val, int* retx, int* rety) {
+	if (y > 0 && (*m)[x][y-1] == val) {
+		*retx = x;
+		*rety = y-1;
+		return TRUE;
+	}
+	if (y < N-1 && (*m)[x][y+1] == val) {
+		*retx = x;
+		*rety = y+1;
+		return TRUE;
+	}
+	if (x > 0 && (*m)[x-1][y] == val) {
+		*retx = x-1;
+		*rety = y;
+		return TRUE;
+	}
+	if (x < N-1 && (*m)[x+1][y] == val) {
+		*retx = x+1;
+		*rety = y;
+		return TRUE;
+	}
+	return FALSE;
+}
+
+// Returns TRUE if val is in a point next to (x,y)
+bool is_adjacent(Matrix* m, int x, int y, int val) {
+	int dud;
+	return get_adjacent(m,x,y,val,&dud,&dud);
+}
+
+// Returns TRUE if the grid sent is a valid printout of a grid in ANY state.
+bool is_good_grid(Matrix* m) {
 	
 	// Make sure the grid makes sense.
+	int i,j,k;
 	
 	// Only one FOOD instance:
 	int total_food = 0;
 	for (i=0; i<N; ++i)
 		for (j=0; j<N; ++j)
-			if (m[i][j] == FOOD)
+			if ((*m)[i][j] == FOOD) {
 				total_food++;
+			}
 	// If the board is full, it may have no food
-	if (total_food != 1 || (total_food == 0 && !IsMatrixFull(&m)))
+	if (total_food != 1) {
 		return FALSE;
+	}
+	if (total_food == 0 && !IsMatrixFull(m)) {
+		return FALSE;
+	}
 	
 	// For each snake color, find the largest segment |X|.
 	// make sure all segments x=1,2,...,|X| exist exactly once and next to each other.
 	// Get the max segments:
-	int max_w=0,max_b=0;
+	int max_w=0,min_b=0;
 	for (i=0; i<N; ++i)
 		for (j=0; j<N; ++j)
-			if (m[i][j] != FOOD && m[i][j] != EMPTY) {
-				max_w = m[i][j] > max_w ? m[i][j] : max_w;
-				max_b = m[i][j] < max_b ? m[i][j] : max_b;
+			if ((*m)[i][j] != FOOD && (*m)[i][j] != EMPTY) {
+				max_w = (*m)[i][j] > max_w ? (*m)[i][j] : max_w;
+				min_b = (*m)[i][j] < min_b ? (*m)[i][j] : min_b;
 			}
-	// Make sure they all exist exactly once, and next to each other:
-	int w_segs[max_w], b_segs[max_b];
+	
+	// Make sure they all exist next to each other:
+	int w_segs[max_w], b_segs[-min_b];
 	for (i=0; i<max_w; ++i)
 		w_segs[i]=0;
-	for (i=0; i<max_b; ++i)
-		b_segs[i]=0;
+	for (i=0; i>min_b; --i)
+		b_segs[-i]=0;
 	for (i=1; i<=max_w; ++i)
 		for (j=0; j<N; ++j)
 			for (k=0; k<N; ++k)
-				if (m[j][k] == i) {
+				if ((*m)[j][k] == i) {
 					w_segs[i-1]++;
-					if (w_segs[i-1] > 1)
-						return FALSE;	// Too many segments
-					if (i>1) {	// Previous segment must be around here somewhere...
-						
+					if (i>1 && !is_adjacent(m,j,k,i-1)) {		// Previous segment must be around here somewhere...
+						return FALSE;
+					}
+					if (i<max_w && !is_adjacent(m,j,k,i+1)) {	// So should the next segment
+						return FALSE;
 					}
 				}
 	// Same thing for black player
+	for (i=-1; i>=min_b; --i)
+		for (j=0; j<N; ++j)
+			for (k=0; k<N; ++k)
+				if ((*m)[j][k] == i) {
+					b_segs[(-i)-1]++;
+					if (i<-1 && !is_adjacent(m,j,k,i+1)) {		// Previous segment must be around here somewhere...
+						return FALSE;
+					}
+					if (i>min_b && !is_adjacent(m,j,k,i-1)) {	// So should the next segment
+						return FALSE;
+					}
+				}
 	
+	// Make sure all segments exist exactly once
+	for (i=0; i<max_w; ++i)
+		if (w_segs[i] != 1) {
+			return FALSE;
+		}
+	for (i=0; i>min_b; --i)
+		if (b_segs[-i] != 1) {
+			return FALSE;
+		}
 	
 	// That's it...
 	return TRUE;
 }
 
-
-/* **************************************
-GENERAL UTILITY
-****************************************/
-
-// Shuffles the contents of the given array.
-void shuffle_arr(int* arr, int n) {
-	int i;
-	for (i=0; i<n; ++i) {
-		int j = i + rand()%(n-i);
-		int tmp = arr[i];
-		arr[i]=arr[j];
-		arr[j]=tmp;
-	}
+// Using the file descriptor, calls read() and then parses the output to a matrix
+bool read_and_parse(int fd, Matrix* m) {
+	CREATE_BUF();
+	if (read(fd,buf,GOOD_BUF_SIZE) != GOOD_BUF_SIZE)
+		return FALSE;
+	return parse_board(buf,m);
 }
+
+// Outputs the grid in string form, given a file descriptor
+void print_board(int fd) {
+	CREATE_BUF();
+	PRINT("Reading board...\n");
+	if (read(fd,buf,GOOD_BUF_SIZE) != GOOD_BUF_SIZE) printf("Couldn't read board!\n");
+	else printf("Board:\n%s",buf);
+}
+
+// Performs some legal move (assumes such a move is possible).
+// If no such move is possible, does nothing
+void do_legal_move(int fd) {
+	CREATE_BUF();
+	Matrix m;
+	read_and_parse(fd,&m);
+	// Find the segment
+	bool is_black = (ioctl(fd,SNAKE_GET_COLOR)==BLACK_COLOR);
+	int color_mod = is_black ? -1 : 1;
+	int i,j;
+	for (i=0; i<N; ++i)
+		for (j=0; j<N; ++j)
+			if (m[i][j] == color_mod)
+				break;
+	// Find a legal move and move
+	int x,y;
+	if (!get_adjacent(&m,i,j,EMPTY,&x,&y))
+		if (!get_adjacent(&m,i,j,FOOD,&x,&y))
+			return;
+	char move;
+	if (x==i) {
+		move = (y-1 == j) ? '4' : '6';
+	}
+	else move = (x-1 == i) ? '2' : '8';
+	
+	// Move!
+	write(fd,&move,1);
+	
+}
+
+
 
