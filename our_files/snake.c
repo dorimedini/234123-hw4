@@ -660,11 +660,11 @@ ssize_t our_read(struct file *filp, char *buf, size_t n, loff_t *f_pos) {
 	// Check if the operation is valid
 	CHECK_DESTROYED(minor);
 	
-	// Piazza 429:
-	if (!buf) return -EFAULT;
-	
 	// If size=0, return 0 (successfully)
 	if (!n) return 0;
+	
+	// Piazza 429:
+	if (!buf) return -EFAULT;
 	
 	// Get the game and lock the grid, read the data, unlock
 	Game* game = games+minor;

@@ -472,7 +472,8 @@ bool many_readers_while_writers_t() {
 	return TRUE;
 }
 
-// Reading with NULL buffer should return EFAULT
+// Reading with NULL buffer should return EFAULT.
+// Reading NULL with count=0 should return 0
 bool read_null_efault() {
 	SETUP_P(1,1);
 	int fd = open(get_node_name(0),O_RDWR);
@@ -480,8 +481,8 @@ bool read_null_efault() {
 	ASSERT(read(fd,NULL,1) == -1);
 	ASSERT(errno == EFAULT);
 	errno = 0;
-	ASSERT(read(fd,NULL,0) == -1);
-	ASSERT(errno == EFAULT);
+	ASSERT(read(fd,NULL,0) == 0);
+	ASSERT(errno == 0);
 	usleep(1000);
 	close(fd);
 	DESTROY_P();
